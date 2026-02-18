@@ -35,15 +35,23 @@ export function ApiKeyList({ initialKeys }: ApiKeyEditorProps) {
                     dbKey="anthropic_api_key"
                     initialValue={initialKeys["anthropic_api_key"] || ""}
                 />
+                <hr className="my-2 border-muted" />
+                <ApiKeyRow
+                    label="Replit Agent API URL"
+                    dbKey="agent_api_url"
+                    initialValue={initialKeys["agent_api_url"] || "https://agent-salesforce-link.replit.app/api/chat/"}
+                    isUrl={true}
+                />
             </div>
         </div>
     );
 }
 
-function ApiKeyRow({ label, dbKey, initialValue }: { label: string, dbKey: string, initialValue: string }) {
+
+function ApiKeyRow({ label, dbKey, initialValue, isUrl = false }: { label: string, dbKey: string, initialValue: string, isUrl?: boolean }) {
     const [value, setValue] = useState(initialValue);
     const [isSaving, setIsSaving] = useState(false);
-    const [showKey, setShowKey] = useState(false);
+    const [showKey, setShowKey] = useState(isUrl);
     const [hasChanged, setHasChanged] = useState(false);
 
     const handleSave = async () => {
@@ -75,7 +83,7 @@ function ApiKeyRow({ label, dbKey, initialValue }: { label: string, dbKey: strin
             <div className="flex gap-2">
                 <div className="relative flex-1">
                     <input
-                        type={showKey ? "text" : "password"}
+                        type={showKey || isUrl ? "text" : "password"}
                         className="w-full bg-background border rounded-md px-3 py-2 text-sm pr-10 focus:outline-none focus:ring-1 focus:ring-primary"
                         placeholder={`Enter ${label} Key...`}
                         value={value}

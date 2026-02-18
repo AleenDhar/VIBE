@@ -1,39 +1,77 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { streamText } from 'ai';
+import { createClient } from '@/lib/supabase/server';
 
-// Allow streaming responses up to 30 seconds
-export const maxDuration = 30;
+// Allow streaming responses up to 120 seconds
+export const maxDuration = 120;
 
 export async function POST(req: Request) {
-    const { messages } = await req.json();
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
 
-    const result = streamText({
-        model: anthropic('claude-3-opus-20240229'),
-        messages,
-        system: `You are an expert React Application Architect and Developer.
-Your task is to build functional, modern, and beautiful React components based on user prompts.
+  if (!user) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+  }
 
-GUIDELINES:
-1.  **Code Output**: When asked to build an app or component, ALWAYS output the full code in a TypeScript React (tsx) code block.
-2.  **Tech Stack**: Use React, Tailwind CSS for styling, and Lucide React for icons. Do NOT use other external libraries unless explicitly asked.
-3.  **Styling**: Use a modern, clean, and "premium" aesthetic. Use gradients, subtle shadows, and rounded corners.
-4.  **Functionality**: Ensure the component is interactive (use useState/useEffect where needed).
-5.  **Explanations**: Keep explanations brief and focused on architectural decisions.
-6.  **Structure**: The code should be a single file component that default exports the main component.
+  const { messages, sessionId }: { messages: Array<{ role: string; content: string }>; sessionId?: string } = await req.json();
 
-EXAMPLE OUTPUT FORMAT:
-Here is the dashboard you requested:
+  const result = streamText({
+    model: anthropic('claude-opus-4-6'),
+    messages: messages.map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    })),
+    system: `You are an expert Application Architect and Developer.
+Your task is to build functional, modern, and beautiful web applications using ONLY vanilla HTML, CSS, and JavaScript.
 
-\`\`\`tsx
-import React, { useState } from 'react';
-import { BarChart, Users } from 'lucide-react';
+CRITICAL RULES:
+1. **Output Format**: Always output code inside a single \`\`\`html code block. The code must be a COMPLETE, self-contained HTML file.
+2. **NO React/JSX**: Do NOT use React, JSX, or any framework requiring compilation. Use plain HTML, CSS, and vanilla JavaScript only.
+3. **Self-contained**: Everything (HTML, CSS, JS) must be in ONE HTML file. Use <style> and <script> tags.
+4. **CDN Libraries**: You may use CDN-hosted libraries like:
+   - Chart.js: <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+   - Lucide Icons: <script src="https://unpkg.com/lucide@latest"></script>
+   - SheetJS (xlsx): <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+5. **Styling**: Use modern CSS with gradients, rounded corners, subtle shadows. Dark mode preferred. Make it look premium and polished.
+6. **Interactivity**: Use vanilla JS event listeners, DOM manipulation, and fetch() for API calls.
+7. **Chat Response**: Keep your text explanation SHORT (1-2 sentences max before the code block). The bulk of your response should be the code.
 
-export default function Dashboard() {
-  // ... implementation
-}
+CAPABILITIES:
+- **File Upload**: Use <input type="file"> with FileReader API and SheetJS for Excel/CSV parsing.
+- **AI Agent Integration**: The app can call \`/api/agent\` with POST { content, projectId, chatId } to access the Replit Agent Server (Salesforce/Avoma/Apollo).
+  - \`/api/agent\` handles project name lookup (e.g., specific project names), chat history, and API keys automatically.
+  - Generating UUIDs is preferred but string IDs are supported.
+- **Data Export**: Generate CSV downloads using Blob and URL.createObjectURL.
+
+EXAMPLE RESPONSE FORMAT:
+Here's your dashboard app:
+
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My App</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script>
+        // App logic here
+    </script>
+</body>
+</html>
 \`\`\`
-`,
-    });
 
-    return result.toDataStreamResponse();
+WHEN MODIFYING AN EXISTING APP:
+- If the user asks for changes, output the FULL updated HTML file (not just the diff).
+- Preserve all existing functionality unless told to remove it.
+- Maintain the same styling approach.`,
+  });
+
+  return result.toTextStreamResponse();
 }

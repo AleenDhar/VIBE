@@ -116,7 +116,7 @@ export async function getApiKeys() {
     const { data } = await supabase
         .from("app_config")
         .select("key, value")
-        .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key"]);
+        .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
 
     // Transform into object
     const keys: Record<string, string> = {};
@@ -133,7 +133,7 @@ export async function updateApiKey(key: string, value: string) {
         return { success: false, error: "Unauthorized: Admins only." };
     }
 
-    const allowedKeys = ["openai_api_key", "google_api_key", "anthropic_api_key"];
+    const allowedKeys = ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"];
     if (!allowedKeys.includes(key)) {
         return { success: false, error: "Invalid API Key type." };
     }
