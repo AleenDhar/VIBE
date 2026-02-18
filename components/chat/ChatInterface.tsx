@@ -10,12 +10,13 @@ import { ChartRenderer } from "@/components/chat/ChartRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 interface ChatProps {
-    projectId: string;
+    projectId: string | null;
     chatId: string;
     initialMessages: any[];
+    initialInput?: string;
 }
 
-export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps) {
+export function ChatInterface({ projectId, chatId, initialMessages, initialInput }: ChatProps) {
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
@@ -139,6 +140,15 @@ export function ChatInterface({ projectId, chatId, initialMessages }: ChatProps)
             setThinkingText("Thinking...");
         }
     }, []); // Only run on mount
+
+    // Auto-send initial input if provided (e.g. from project page textarea)
+    const initialInputSentRef = useRef(false);
+    useEffect(() => {
+        if (initialInput && !initialInputSentRef.current && initialMessages.length === 0) {
+            initialInputSentRef.current = true;
+            handleSend(initialInput);
+        }
+    }, [initialInput]);
 
     // Realtime Subscription
     useEffect(() => {

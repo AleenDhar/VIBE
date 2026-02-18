@@ -54,11 +54,7 @@ function HomeContent() {
         <div className="flex flex-col gap-4 w-full max-w-xs pt-4">
           <LoginButton />
 
-          <Button variant="ghost" className="w-full" asChild>
-            <Link href="/dashboard">
-              Continue as Guest (Demo)
-            </Link>
-          </Button>
+
         </div>
 
         <p className="text-xs text-muted-foreground pt-8">

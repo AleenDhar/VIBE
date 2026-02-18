@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
         const { projectId, chatId, content, previousMessages, model } = await req.json();
         console.log(`[API] Received request for Chat: ${chatId}, Project: ${projectId}, Model: ${model}`);
 
-        if (!projectId || !chatId || !content) {
+        if (!chatId || !content) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
 
@@ -57,27 +57,31 @@ export async function POST(req: NextRequest) {
             .single();
         const basePrompt = basePromptData?.value || "You are a helpful AI assistant.";
 
-        // 3. Get Project System Prompt
-        const { data: project } = await supabase
-            .from("projects")
-            .select("system_prompt")
-            .eq("id", projectId)
-            .single();
-        let systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
+        let systemPrompt = basePrompt;
 
-        // 4. Get Project Memories
-        const { data: memories } = await supabase
-            .from("project_memories")
-            .select("memory_type, content, sentiment, importance")
-            .eq("project_id", projectId)
-            .order("importance", { ascending: false })
-            .limit(10);
+        // 3. Get Project System Prompt & Memories (only if chat belongs to a project)
+        if (projectId) {
+            const { data: project } = await supabase
+                .from("projects")
+                .select("system_prompt")
+                .eq("id", projectId)
+                .single();
+            systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
 
-        if (memories && memories.length > 0) {
-            const memoryContext = memories.map(m =>
-                `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
-            ).join("\n");
-            systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
+            // 4. Get Project Memories
+            const { data: memories } = await supabase
+                .from("project_memories")
+                .select("memory_type, content, sentiment, importance")
+                .eq("project_id", projectId)
+                .order("importance", { ascending: false })
+                .limit(10);
+
+            if (memories && memories.length > 0) {
+                const memoryContext = memories.map(m =>
+                    `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
+                ).join("\n");
+                systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
+            }
         }
 
         // 5. Get API Keys (if available)

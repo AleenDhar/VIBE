@@ -29,7 +29,33 @@ export async function createNewChat(projectId: string) {
     return { id: data.id };
 }
 
-export async function sendMessage(projectId: string, chatId: string, content: string, previousMessages: any[]) {
+export async function createStandaloneChat() {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+        return { error: "Unauthorized" };
+    }
+
+    const { data, error } = await supabase
+        .from("chats")
+        .insert({
+            project_id: null,
+            title: "New Chat",
+            user_id: user.id
+        })
+        .select()
+        .single();
+
+    if (error) {
+        console.error("Create Standalone Chat Error:", error);
+        return { error: error.message };
+    }
+
+    return { id: data.id };
+}
+
+export async function sendMessage(projectId: string | null, chatId: string, content: string, previousMessages: any[]) {
     const supabase = await createClient();
 
     // Save user message
@@ -48,30 +74,35 @@ export async function sendMessage(projectId: string, chatId: string, content: st
 
     const basePrompt = basePromptData?.value || "You are a helpful AI assistant.";
 
-    // Get Project System Prompt
-    const { data: project } = await supabase
-        .from("projects")
-        .select("system_prompt")
-        .eq("id", projectId)
-        .single();
+    let systemPrompt = basePrompt;
 
-    let systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
+    // Only fetch project-specific context if chat belongs to a project
+    if (projectId) {
+        // Get Project System Prompt
+        const { data: project } = await supabase
+            .from("projects")
+            .select("system_prompt")
+            .eq("id", projectId)
+            .single();
 
-    // Get project memories for context
-    const { data: memories } = await supabase
-        .from("project_memories")
-        .select("memory_type, content, sentiment, importance")
-        .eq("project_id", projectId)
-        .order("importance", { ascending: false })
-        .limit(10);
+        systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
 
-    // Add memories to system prompt if they exist
-    if (memories && memories.length > 0) {
-        const memoryContext = memories.map(m =>
-            `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
-        ).join("\n");
+        // Get project memories for context
+        const { data: memories } = await supabase
+            .from("project_memories")
+            .select("memory_type, content, sentiment, importance")
+            .eq("project_id", projectId)
+            .order("importance", { ascending: false })
+            .limit(10);
 
-        systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
+        // Add memories to system prompt if they exist
+        if (memories && memories.length > 0) {
+            const memoryContext = memories.map(m =>
+                `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
+            ).join("\n");
+
+            systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
+        }
     }
 
     // Construct Payload
@@ -142,7 +173,10 @@ export async function sendMessage(projectId: string, chatId: string, content: st
             content: output
         });
 
-        revalidatePath(`/projects/${projectId}/chat/${chatId}`);
+        if (projectId) {
+            revalidatePath(`/projects/${projectId}`);
+        }
+        revalidatePath(`/chat/${chatId}`);
         return { success: true, message: output };
 
     } catch (err: any) {
