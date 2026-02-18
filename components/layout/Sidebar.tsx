@@ -16,7 +16,8 @@ import {
     History,
     FileText,
     Loader2,
-    MessageSquarePlus
+    MessageSquarePlus,
+    Sparkles
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -27,6 +28,7 @@ const menuItems = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Projects", href: "/projects", icon: FolderOpen },
     { name: "Deal Analytics", href: "/analytics", icon: BarChart },
+    { name: "App Builder", href: "/builder", icon: Sparkles },
     { name: "Users", href: "/users", icon: Users },
     { name: "Admin Panel", href: "/admin", icon: ShieldCheck },
     { name: "Settings", href: "/settings", icon: Settings },
@@ -207,33 +209,60 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
 
                         {/* Recent Projects Section */}
                         {!isCollapsed && (
-                            <div className="space-y-2">
-                                <h4 className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                                    <History className="h-3 w-3" />
-                                    Recent Projects
-                                </h4>
+                            <div className="mt-6 space-y-2">
+                                <div className="flex items-center justify-between px-3 mb-2">
+                                    <h4 className="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                                        Recent Projects
+                                    </h4>
+                                    <History className="h-3 w-3 text-muted-foreground/50" />
+                                </div>
                                 <div className="space-y-1">
                                     {loading ? (
                                         <div className="flex items-center justify-center py-4">
                                             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                                         </div>
                                     ) : recentProjects.length === 0 ? (
-                                        <p className="px-3 text-xs text-muted-foreground italic">No recent projects</p>
+                                        <div className="px-3 py-4 text-center rounded-lg border border-dashed text-muted-foreground/50 bg-muted/20">
+                                            <p className="text-xs">No recent projects</p>
+                                        </div>
                                     ) : (
-                                        recentProjects.map((project) => (
-                                            <Link
-                                                key={project.id}
-                                                href={`/projects/${project.id}`}
-                                                className={cn(
-                                                    "flex items-center rounded-lg px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground truncate block",
-                                                    pathname === `/projects/${project.id}` && "bg-accent"
-                                                )}
-                                                onClick={() => setMobileOpen?.(false)}
-                                            >
-                                                <FileText className="h-4 w-4 mr-2 text-muted-foreground flex-shrink-0" />
-                                                <span className="truncate">{project.name}</span>
-                                            </Link>
-                                        ))
+                                        recentProjects.map((project) => {
+                                            const isActive = pathname === `/projects/${project.id}`;
+                                            return (
+                                                <Link
+                                                    key={project.id}
+                                                    href={`/projects/${project.id}`}
+                                                    className={cn(
+                                                        "group flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all duration-200 outline-none hover:bg-accent/50 focus:bg-accent",
+                                                        isActive ? "bg-accent/80 shadow-sm" : "hover:shadow-sm hover:border-border/50"
+                                                    )}
+                                                    onClick={() => setMobileOpen?.(false)}
+                                                >
+                                                    <div className={cn(
+                                                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-sm transition-colors duration-200",
+                                                        isActive
+                                                            ? "bg-primary/10 border-primary/20 text-primary"
+                                                            : "bg-background border-border group-hover:border-primary/30 group-hover:text-primary"
+                                                    )}>
+                                                        <FileText className="h-4 w-4" />
+                                                    </div>
+                                                    <div className="flex flex-col overflow-hidden transition-all">
+                                                        <span className={cn(
+                                                            "truncate text-sm font-medium leading-tight",
+                                                            isActive ? "text-primary" : "text-foreground group-hover:text-primary/90"
+                                                        )}>
+                                                            {project.name}
+                                                        </span>
+                                                        <span className="truncate text-[10px] text-muted-foreground/70 mt-0.5 font-normal">
+                                                            {new Date(project.created_at).toLocaleDateString()}
+                                                        </span>
+                                                    </div>
+                                                    {isActive && (
+                                                        <div className="ml-auto w-1 h-1 rounded-full bg-primary" />
+                                                    )}
+                                                </Link>
+                                            );
+                                        })
                                     )}
                                 </div>
                             </div>
