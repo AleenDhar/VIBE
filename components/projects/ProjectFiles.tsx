@@ -1,14 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { Upload, FileText, Loader2, Trash2 } from "lucide-react";
+import { Loader2, Trash2, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 interface ProjectFilesProps {
     projectId: string;
     initialFiles: any[];
+}
+
+function getFileExtension(filename: string): string {
+    const parts = filename.split(".");
+    if (parts.length < 2) return "FILE";
+    return parts[parts.length - 1].toUpperCase();
 }
 
 export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
@@ -25,19 +30,16 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
         const filePath = `projects/${projectId}/${Date.now()}_${file.name}`;
 
         try {
-            // Upload to storage
             const { error: uploadError } = await supabase.storage
                 .from("project-files")
                 .upload(filePath, file);
 
             if (uploadError) throw uploadError;
 
-            // Save metadata via server action
             const { addDocument } = await import("@/lib/actions/documents");
             const result = await addDocument(projectId, file.name, filePath);
 
             if (result.success) {
-                // Refresh the page to show new file
                 window.location.reload();
             } else {
                 throw new Error(result.error);
@@ -56,10 +58,8 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
         const supabase = createClient();
 
         try {
-            // Delete from storage
             await supabase.storage.from("project-files").remove([filePath]);
 
-            // Delete metadata via server action
             const { deleteDocument } = await import("@/lib/actions/documents");
             const result = await deleteDocument(docId);
 
@@ -75,71 +75,62 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
     };
 
     return (
-        <div className="space-y-4">
+        <div className="space-y-3">
             <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold">Project Files</h2>
-                <label>
+                <h3 className="font-semibold text-base text-foreground">Files</h3>
+                <label className="cursor-pointer">
                     <input
                         type="file"
                         className="hidden"
                         onChange={handleUpload}
                         disabled={uploading}
-                        accept=".pdf,.csv,.xls,.xlsx,.txt,.doc,.docx,image/*"
+                        accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,image/*"
                     />
-                    <Button variant="outline" disabled={uploading} asChild>
-                        <span>
-                            {uploading ? (
-                                <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Uploading...
-                                </>
-                            ) : (
-                                <>
-                                    <Upload className="mr-2 h-4 w-4" />
-                                    Upload File
-                                </>
-                            )}
-                        </span>
-                    </Button>
+                    <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                        {uploading ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                            <Plus className="h-4 w-4" />
+                        )}
+                    </div>
                 </label>
             </div>
 
             {files && files.length > 0 ? (
-                <div className="grid gap-3 max-h-[300px] overflow-y-auto p-1">
-                    {files.map((doc: any) => (
-                        <Card key={doc.id} className="p-4 hover:bg-accent/50 transition-colors">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <div className="h-10 w-10 bg-primary/10 rounded-lg flex items-center justify-center text-primary">
-                                        <FileText className="h-5 w-5" />
-                                    </div>
-                                    <div>
-                                        <h4 className="font-medium text-sm break-all">{doc.name}</h4>
-                                        <p className="text-xs text-muted-foreground">
-                                            {new Date(doc.created_at).toLocaleDateString()}
-                                        </p>
-                                    </div>
-                                </div>
+                <div className="grid grid-cols-2 gap-3">
+                    {files.map((doc: any) => {
+                        const ext = getFileExtension(doc.name);
+                        return (
+                            <div
+                                key={doc.id}
+                                className="group relative flex flex-col justify-between rounded-xl border border-border bg-card/50 p-4 min-h-[120px] hover:border-primary/40 transition-all"
+                            >
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="text-muted-foreground hover:text-destructive shrink-0"
+                                    className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
                                     onClick={() => handleDelete(doc.id, doc.file_path)}
                                 >
-                                    <Trash2 className="h-4 w-4" />
+                                    <Trash2 className="h-3 w-3" />
                                 </Button>
+
+                                <p className="text-sm font-medium text-foreground leading-snug pr-6 line-clamp-3">
+                                    {doc.name}
+                                </p>
+
+                                <div className="mt-3">
+                                    <span className="inline-block text-[11px] font-medium text-muted-foreground bg-muted/80 px-2 py-0.5 rounded">
+                                        {ext}
+                                    </span>
+                                </div>
                             </div>
-                        </Card>
-                    ))}
+                        );
+                    })}
                 </div>
             ) : (
-                <div className="text-center py-12 border rounded-xl bg-muted/30">
-                    <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4 opacity-50" />
-                    <h3 className="font-medium text-muted-foreground">No files uploaded</h3>
-                    <p className="text-sm text-muted-foreground/80 mt-1">
-                        Upload documents to provide context for the AI.
-                    </p>
-                </div>
+                <p className="text-sm text-muted-foreground italic">
+                    No files uploaded yet.
+                </p>
             )}
         </div>
     );
