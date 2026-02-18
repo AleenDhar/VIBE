@@ -109,7 +109,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }
     }, [messages, loading]);
 
-    // Check if there's a pending message on initial load
+    // Check if there's a pending message on initial load yes
     useEffect(() => {
         // Find the last user message
         let lastUserIndex = -1;
