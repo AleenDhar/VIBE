@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useChat } from "ai/react";
 import {
     Send,
     Sparkles,
@@ -9,29 +10,17 @@ import {
     Laptop,
     Smartphone,
     Tablet,
-    PaintBucket,
-    Hammer,
     Wand2,
     RefreshCw,
-    Maximize2,
     Minimize2,
     Bot,
     User,
-    Settings,
     MoreHorizontal,
     Share,
     Download
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
-
-interface Message {
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-    timestamp: Date;
-    isGenerating?: boolean;
-}
 
 interface AppConfig {
     name: string;
@@ -41,16 +30,17 @@ interface AppConfig {
 }
 
 export function AppBuilderInterface() {
-    const [messages, setMessages] = useState<Message[]>([
-        {
-            id: "1",
-            role: "assistant",
-            content: "Hi! I'm your App Architect. Describe the tool or application you want to build, and I'll generate it for you.",
-            timestamp: new Date()
-        }
-    ]);
-    const [input, setInput] = useState("");
-    const [isThinking, setIsThinking] = useState(false);
+    const { messages, input, handleInputChange, handleSubmit, isLoading, setInput, setMessages } = useChat({
+        api: "/api/builder",
+        initialMessages: [
+            {
+                id: "1",
+                role: "assistant",
+                content: "Hi! I'm your App Architect. Describe the tool or application you want to build, and I'll generate it for you.",
+            }
+        ]
+    });
+
     const [previewMode, setPreviewMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
     const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -65,38 +55,29 @@ export function AppBuilderInterface() {
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // Auto-scroll on new messages
     useEffect(() => {
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-    }, [messages, isThinking]);
+    }, [messages, isLoading]);
 
-    const handleSend = async () => {
-        if (!input.trim()) return;
+    // Extract generated code from the last assistant message
+    const generatedCode = (() => {
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage?.role === "assistant") {
+            const codeBlock = lastMessage.content.match(/```tsx?([\s\S]*?)```/);
+            if (codeBlock) return codeBlock[1].trim();
+        }
+        return "";
+    })();
 
-        const userMsg: Message = {
-            id: Date.now().toString(),
-            role: "user",
-            content: input,
-            timestamp: new Date()
-        };
-
-        setMessages(prev => [...prev, userMsg]);
-        setInput("");
-        setIsThinking(true);
-
-        // Simulate AI response
-        setTimeout(() => {
-            const aiMsg: Message = {
-                id: (Date.now() + 1).toString(),
-                role: "assistant",
-                content: "I'm working on that. I'll create a layout with a dashboard view and integrate the data processing agent.",
-                timestamp: new Date()
-            };
-            setMessages(prev => [...prev, aiMsg]);
-            setIsThinking(false);
-        }, 1500);
-    };
+    // Update view mode if code is generated
+    useEffect(() => {
+        if (generatedCode && !isLoading) {
+            setViewMode("code");
+        }
+    }, [generatedCode, isLoading]);
 
     return (
         <div className="flex h-full w-full bg-background overflow-hidden text-foreground">
@@ -132,11 +113,11 @@ export function AppBuilderInterface() {
                                     ? "bg-primary text-primary-foreground rounded-tr-none"
                                     : "bg-muted/50 text-foreground border rounded-tl-none"
                             )}>
-                                {msg.content}
+                                <div className="whitespace-pre-wrap">{msg.content}</div>
                             </div>
                         </div>
                     ))}
-                    {isThinking && (
+                    {isLoading && (
                         <div className="flex gap-3">
                             <div className="flex-shrink-0 h-8 w-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center animate-pulse">
                                 <Bot className="h-4 w-4" />
@@ -151,28 +132,36 @@ export function AppBuilderInterface() {
 
                 {/* Input Area */}
                 <div className="p-4 border-t bg-background/50">
-                    <div className="relative">
+                    <form
+                        className="relative"
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            if (!input.trim() || isLoading) return;
+                            handleSubmit(e);
+                        }}
+                    >
                         <textarea
                             className="w-full bg-muted/50 border rounded-xl px-4 py-3 pr-12 text-sm resize-none focus:outline-none focus:ring-1 focus:ring-primary min-h-[50px] max-h-[150px]"
                             placeholder="Describe the app you want to build..."
                             value={input}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={handleInputChange}
                             onKeyDown={(e) => {
                                 if (e.key === "Enter" && !e.shiftKey) {
                                     e.preventDefault();
-                                    handleSend();
+                                    if (!input.trim() || isLoading) return;
+                                    handleSubmit(e as any);
                                 }
                             }}
                         />
                         <Button
+                            type="submit"
                             className="absolute right-2 bottom-2 h-8 w-8 p-0 rounded-lg"
                             size="sm"
-                            disabled={!input.trim() || isThinking}
-                            onClick={handleSend}
+                            disabled={!input.trim() || isLoading}
                         >
                             <Send className="h-4 w-4" />
                         </Button>
-                    </div>
+                    </form>
                 </div>
             </div>
 
@@ -268,9 +257,9 @@ export function AppBuilderInterface() {
 
                     <div className={cn(
                         "bg-background border shadow-2xl transition-all duration-300 flex flex-col overflow-hidden relative",
-                        previewMode === "desktop" ? "w-full max-w-5xl h-[calc(100vh-140px)] rounded-xl" : "",
-                        previewMode === "tablet" ? "w-[768px] h-[1024px] max-h-[calc(100vh-140px)] rounded-[2rem] border-[8px] border-muted-foreground/10" : "",
-                        previewMode === "mobile" ? "w-[375px] h-[812px] max-h-[calc(100vh-140px)] rounded-[2.5rem] border-[8px] border-muted-foreground/10" : ""
+                        previewMode === "desktop" ? "w-full max-w-5xl h-full rounded-xl" : "",
+                        previewMode === "tablet" ? "w-[768px] h-[1024px] max-h-full rounded-[2rem] border-[8px] border-muted-foreground/10" : "",
+                        previewMode === "mobile" ? "w-[375px] h-[812px] max-h-full rounded-[2.5rem] border-[8px] border-muted-foreground/10" : ""
                     )}>
 
                         {/* Mock App Header */}
@@ -295,29 +284,23 @@ export function AppBuilderInterface() {
                                         Use the chat on the left to describe your app.
                                         Example: "Build a lead scoring dashboard with a chart and a table."
                                     </p>
-                                    <Button variant="outline" className="mt-4" onClick={() => setInput("Build a CRM dashboard")}>
+                                    <Button variant="outline" className="mt-4" onClick={() => {
+                                        setInput("Build a CRM dashboard");
+                                    }}>
                                         Try Example
                                     </Button>
 
-                                    {/* Placeholder specific UI elements could go here if generated */}
+                                    {generatedCode && (
+                                        <div className="mt-8 p-4 bg-yellow-500/10 text-yellow-600 rounded-lg text-sm border border-yellow-500/20">
+                                            Code generated! Switch to "Code" view to see it.
+                                            <br />(Auto-preview requires a runtime environment)
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
-                                <div className="p-4 font-mono text-sm">
-                                    <pre className="text-muted-foreground">
-                                        {`// Generated Application Code
-// Status: Waiting for prompt...
-
-import React from 'react';
-import { Agent } from '@app/agent';
-
-export default function App() {
-  return (
-    <div className="p-8">
-      <h1>${appConfig.name}</h1>
-      {/* Dynamic content will appear here */}
-    </div>
-  );
-}`}
+                                <div className="h-full w-full overflow-auto p-4 font-mono text-sm">
+                                    <pre className="text-muted-foreground whitespace-pre-wrap">
+                                        {generatedCode || "// No code generated yet. Waiting for prompt..."}
                                     </pre>
                                 </div>
                             )}
