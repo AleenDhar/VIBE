@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
-import { ChatInterface } from "@/components/chat/ChatInterface";
+import { StandaloneChatClient } from "@/components/chat/StandaloneChatClient";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function StandaloneChatPage({ params }: { params: Promise<{
         return <div>Please login first.</div>;
     }
 
-    // Verify chat access — standalone chats have project_id = null
+    // Verify chat access
     const { data: chat } = await supabase
         .from("chats")
         .select("*")
@@ -33,7 +33,7 @@ export default async function StandaloneChatPage({ params }: { params: Promise<{
     return (
         <div className="flex flex-col h-full gap-2">
             <div className="h-full">
-                <ChatInterface
+                <StandaloneChatClient
                     projectId={chat.project_id || null}
                     chatId={chatId}
                     initialMessages={messages || []}

@@ -4,20 +4,16 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-    LayoutDashboard,
+    Plus,
+    MessageSquare,
     FolderOpen,
     Users,
-    Settings,
     ShieldCheck,
-    BarChart,
     PanelLeftClose,
     PanelLeftOpen,
-    Plus,
-    History,
-    FileText,
     Loader2,
-    MessageSquarePlus,
-    Sparkles
+    MoreHorizontal,
+    LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -25,13 +21,10 @@ import { ModeToggle } from "@/components/ModeToggle";
 import { createClient } from "@/lib/supabase/client";
 
 const menuItems = [
-    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { name: "Chats", href: "/chat", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
-    { name: "Deal Analytics", href: "/analytics", icon: BarChart },
-    { name: "App Builder", href: "/builder", icon: Sparkles },
     { name: "Users", href: "/users", icon: Users },
     { name: "Admin Panel", href: "/admin", icon: ShieldCheck },
-    { name: "Settings", href: "/settings", icon: Settings },
 ];
 
 interface SidebarProps {
@@ -41,45 +34,96 @@ interface SidebarProps {
     setMobileOpen?: (open: boolean) => void;
 }
 
-interface Project {
+interface RecentChat {
     id: string;
-    name: string;
-    created_at: string;
+    title: string;
+    project_id: string | null;
+}
+
+interface UserProfile {
+    full_name: string | null;
+    avatar_url: string | null;
+    email: string;
 }
 
 export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMobileOpen }: SidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
     const supabase = createClient();
-    const [recentProjects, setRecentProjects] = useState<Project[]>([]);
+    const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
     const [loading, setLoading] = useState(true);
     const [creatingChat, setCreatingChat] = useState(false);
+    const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
     useEffect(() => {
-        const fetchProjects = async () => {
+        const fetchData = async () => {
             try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return;
 
-                const { data, error } = await supabase
-                    .from("projects")
-                    .select("id, name, created_at")
-                    .eq("owner_id", user.id)
-                    .order("created_at", { ascending: false })
-                    .limit(5);
+                const { data: profile } = await supabase
+                    .from("profiles")
+                    .select("full_name, avatar_url")
+                    .eq("id", user.id)
+                    .single();
 
-                if (data) {
-                    setRecentProjects(data);
-                }
+                setUserProfile({
+                    full_name: profile?.full_name || null,
+                    avatar_url: profile?.avatar_url || null,
+                    email: user.email || "",
+                });
+
+                const { data: chats } = await supabase
+                    .from("chats")
+                    .select("id, title, project_id")
+                    .eq("user_id", user.id)
+                    .order("created_at", { ascending: false })
+                    .limit(20);
+
+                if (chats) setRecentChats(chats);
             } catch (error) {
-                console.error("Error fetching projects:", error);
+                console.error("Error fetching sidebar data:", error);
             } finally {
                 setLoading(false);
             }
         };
 
-        fetchProjects();
+        fetchData();
     }, []);
+
+    const handleNewChat = async () => {
+        setCreatingChat(true);
+        try {
+            const { createStandaloneChat } = await import("@/lib/actions/chat");
+            const result = await createStandaloneChat();
+            if (result.id) {
+                router.push(`/chat/${result.id}`);
+                setMobileOpen?.(false);
+            }
+        } catch (err) {
+            console.error("Error creating chat:", err);
+        } finally {
+            setCreatingChat(false);
+        }
+    };
+
+    const handleLogout = async () => {
+        await supabase.auth.signOut();
+        router.push("/");
+    };
+
+    const getChatHref = (chat: RecentChat) => {
+        if (chat.project_id) {
+            return `/projects/${chat.project_id}/chat/${chat.id}`;
+        }
+        return `/chat/${chat.id}`;
+    };
+
+    const userInitial = userProfile?.full_name
+        ? userProfile.full_name.charAt(0).toUpperCase()
+        : userProfile?.email?.charAt(0).toUpperCase() || "?";
+
+    const userDisplayName = userProfile?.full_name || userProfile?.email?.split("@")[0] || "User";
 
     return (
         <>
@@ -93,187 +137,156 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
 
             <aside
                 className={cn(
-                    "fixed left-0 top-0 z-40 h-screen border-r bg-background/95 backdrop-blur transition-all duration-300 supports-[backdrop-filter]:bg-background/60 flex flex-col",
-                    // Mobile: Always w-64, toggle transform
+                    "fixed left-0 top-0 z-40 h-screen border-r border-border/30 bg-background/95 backdrop-blur transition-all duration-300 supports-[backdrop-filter]:bg-background/60 flex flex-col",
                     "w-64 -translate-x-full md:translate-x-0",
                     mobileOpen && "translate-x-0",
-                    // Desktop: Toggle width
                     isCollapsed ? "md:w-16" : "md:w-64"
                 )}
             >
-                <div className="flex h-full flex-col px-3 py-4">
-                    {/* Header / Logo */}
-                    <div className={cn("mb-6 flex items-center justify-between", isCollapsed ? "md:justify-center md:px-0" : "px-2")}>
-                        <div className="flex items-center">
-                            <div className="flex h-8 w-8 items-center justify-center rounded bg-primary text-primary-foreground">
-                                <BarChart className="h-5 w-5" />
-                            </div>
-                            <span className={cn("ml-3 text-xl font-bold tracking-tight text-foreground whitespace-nowrap", isCollapsed && "md:hidden")}>
-                                Deal Intel
-                            </span>
-                        </div>
-                        {/* Mobile Close Button */}
-                        <div className="md:hidden">
-                            <Button variant="ghost" size="icon" onClick={() => setMobileOpen?.(false)}>
-                                <PanelLeftClose className="h-4 w-4" />
-                            </Button>
-                        </div>
-                    </div>
-
-                    {/* Desktop Toggle Button */}
-                    <div className={cn("mb-4 hidden md:flex", isCollapsed ? "justify-center" : "justify-end px-2")}>
-                        <Button variant="ghost" size="icon" onClick={toggleCollapse} title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}>
+                <div className="flex h-full flex-col px-3 py-3">
+                    {/* Toggle Button */}
+                    <div className={cn("mb-3 flex", isCollapsed ? "md:justify-center" : "justify-start px-1")}>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => { toggleCollapse(); setMobileOpen?.(false); }}
+                            className="h-8 w-8 text-muted-foreground/70 hover:text-foreground hidden md:flex"
+                        >
                             {isCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                         </Button>
-                    </div>
-
-                    {/* New Project Button */}
-                    <div className={cn("mb-2", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
                         <Button
-                            asChild
-                            variant="glass"
-                            className={cn(
-                                "w-full justify-start gap-2",
-                                isCollapsed && "w-10 h-10 p-0 justify-center"
-                            )}
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setMobileOpen?.(false)}
+                            className="h-8 w-8 text-muted-foreground/70 hover:text-foreground md:hidden"
                         >
-                            <Link href="/projects/new">
-                                <Plus className={cn("h-4 w-4", !isCollapsed && "mr-1")} />
-                                {!isCollapsed && "New Project"}
-                            </Link>
+                            <PanelLeftClose className="h-4 w-4" />
                         </Button>
                     </div>
 
-                    {/* New Chat Button */}
-                    <div className={cn("mb-6", isCollapsed ? "px-0 flex justify-center" : "px-0")}>
-                        <Button
-                            variant="outline"
-                            disabled={creatingChat}
-                            className={cn(
-                                "w-full justify-start gap-2",
-                                isCollapsed && "w-10 h-10 p-0 justify-center"
-                            )}
-                            onClick={async () => {
-                                setCreatingChat(true);
-                                try {
-                                    const { createStandaloneChat } = await import("@/lib/actions/chat");
-                                    const result = await createStandaloneChat();
-                                    if (result.id) {
-                                        router.push(`/chat/${result.id}`);
-                                        setMobileOpen?.(false);
-                                    } else {
-                                        console.error("Failed to create chat:", result.error);
-                                    }
-                                } catch (err) {
-                                    console.error("Error creating standalone chat:", err);
-                                } finally {
-                                    setCreatingChat(false);
-                                }
-                            }}
-                        >
-                            {creatingChat ? (
-                                <Loader2 className={cn("h-4 w-4 animate-spin", !isCollapsed && "mr-1")} />
-                            ) : (
-                                <MessageSquarePlus className={cn("h-4 w-4", !isCollapsed && "mr-1")} />
-                            )}
-                            {!isCollapsed && (creatingChat ? "Creating..." : "New Chat")}
-                        </Button>
-                    </div>
+                    {/* New Chat */}
+                    <button
+                        disabled={creatingChat}
+                        onClick={handleNewChat}
+                        className={cn(
+                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4",
+                            isCollapsed && "md:justify-center md:px-2"
+                        )}
+                    >
+                        {creatingChat ? (
+                            <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
+                        ) : (
+                            <Plus className="h-4 w-4 flex-shrink-0" />
+                        )}
+                        <span className={cn("text-sm", isCollapsed && "md:hidden")}>
+                            {creatingChat ? "Creating..." : "New chat"}
+                        </span>
+                    </button>
 
                     {/* Navigation */}
-                    <div className="flex-1 overflow-y-auto space-y-6 scrollbar-none">
-                        <nav className="space-y-1">
-                            {menuItems.map((item) => {
-                                const isActive = pathname.startsWith(item.href);
-                                return (
-                                    <Link
-                                        key={item.href}
-                                        href={item.href}
-                                        className={cn(
-                                            "flex items-center rounded-lg py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground",
-                                            isCollapsed ? "md:justify-center md:px-2" : "px-3",
-                                            mobileOpen ? "px-3" : "",
-                                            isActive
-                                                ? "bg-primary text-primary-foreground shadow-sm"
-                                                : "text-muted-foreground"
-                                        )}
-                                        title={isCollapsed ? item.name : undefined}
-                                        onClick={() => setMobileOpen?.(false)}
-                                    >
-                                        <item.icon className={cn("h-5 w-5 flex-shrink-0", (!isCollapsed || mobileOpen) && "mr-3", isCollapsed && !mobileOpen && "md:mr-0")} />
-                                        <span className={cn(isCollapsed && "md:hidden")}>{item.name}</span>
-                                    </Link>
-                                );
-                            })}
-                        </nav>
+                    <nav className={cn("space-y-0.5 mb-4", isCollapsed && "flex flex-col items-center")}>
+                        {menuItems.map((item) => {
+                            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+                            return (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                                        isCollapsed ? "md:justify-center md:px-2 md:w-10" : "",
+                                        isActive
+                                            ? "text-foreground font-medium"
+                                            : "text-muted-foreground hover:text-foreground"
+                                    )}
+                                    title={isCollapsed ? item.name : undefined}
+                                    onClick={() => setMobileOpen?.(false)}
+                                >
+                                    <item.icon className="h-[18px] w-[18px] flex-shrink-0" />
+                                    <span className={cn(isCollapsed && "md:hidden")}>{item.name}</span>
+                                </Link>
+                            );
+                        })}
+                    </nav>
 
-                        {/* Recent Projects Section */}
+                    {/* Recents */}
+                    <div className="flex-1 overflow-y-auto sidebar-scroll min-h-0">
                         {!isCollapsed && (
-                            <div className="mt-6 space-y-2">
-                                <div className="flex items-center justify-between px-3 mb-2">
-                                    <h4 className="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wider">
-                                        Recent Projects
-                                    </h4>
-                                    <History className="h-3 w-3 text-muted-foreground/50" />
-                                </div>
-                                <div className="space-y-1">
-                                    {loading ? (
-                                        <div className="flex items-center justify-center py-4">
-                                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                                        </div>
-                                    ) : recentProjects.length === 0 ? (
-                                        <div className="px-3 py-4 text-center rounded-lg border border-dashed text-muted-foreground/50 bg-muted/20">
-                                            <p className="text-xs">No recent projects</p>
-                                        </div>
-                                    ) : (
-                                        recentProjects.map((project) => {
-                                            const isActive = pathname === `/projects/${project.id}`;
+                            <div>
+                                <h4 className="px-3 text-[11px] font-medium text-muted-foreground/50 uppercase tracking-wider mb-2">
+                                    Recents
+                                </h4>
+                                {loading ? (
+                                    <div className="flex items-center justify-center py-4">
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/40" />
+                                    </div>
+                                ) : recentChats.length === 0 ? (
+                                    <p className="px-3 text-xs text-muted-foreground/40">No recent chats</p>
+                                ) : (
+                                    <div className="space-y-px">
+                                        {recentChats.map((chat) => {
+                                            const href = getChatHref(chat);
+                                            const isActive = pathname === href;
                                             return (
                                                 <Link
-                                                    key={project.id}
-                                                    href={`/projects/${project.id}`}
+                                                    key={chat.id}
+                                                    href={href}
                                                     className={cn(
-                                                        "group flex items-center gap-3 rounded-xl px-3 py-2.5 transition-all duration-200 outline-none hover:bg-accent/50 focus:bg-accent",
-                                                        isActive ? "bg-accent/80 shadow-sm" : "hover:shadow-sm hover:border-border/50"
+                                                        "group flex items-center justify-between rounded-md px-3 py-1.5 text-[13px] transition-colors",
+                                                        isActive
+                                                            ? "bg-accent/40 text-foreground"
+                                                            : "text-muted-foreground/80 hover:text-foreground hover:bg-accent/20"
                                                     )}
                                                     onClick={() => setMobileOpen?.(false)}
                                                 >
-                                                    <div className={cn(
-                                                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-sm transition-colors duration-200",
-                                                        isActive
-                                                            ? "bg-primary/10 border-primary/20 text-primary"
-                                                            : "bg-background border-border group-hover:border-primary/30 group-hover:text-primary"
-                                                    )}>
-                                                        <FileText className="h-4 w-4" />
-                                                    </div>
-                                                    <div className="flex flex-col overflow-hidden transition-all">
-                                                        <span className={cn(
-                                                            "truncate text-sm font-medium leading-tight",
-                                                            isActive ? "text-primary" : "text-foreground group-hover:text-primary/90"
-                                                        )}>
-                                                            {project.name}
-                                                        </span>
-                                                        <span className="truncate text-[10px] text-muted-foreground/70 mt-0.5 font-normal">
-                                                            {new Date(project.created_at).toLocaleDateString()}
-                                                        </span>
-                                                    </div>
-                                                    {isActive && (
-                                                        <div className="ml-auto w-1 h-1 rounded-full bg-primary" />
-                                                    )}
+                                                    <span className="truncate pr-2">{chat.title || "New Chat"}</span>
+                                                    <button
+                                                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-foreground p-0.5 rounded flex-shrink-0"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                        }}
+                                                    >
+                                                        <MoreHorizontal className="h-3.5 w-3.5" />
+                                                    </button>
                                                 </Link>
                                             );
-                                        })
-                                    )}
-                                </div>
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
 
-                    {/* Footer Actions */}
-                    <div className="mt-auto border-t pt-4 space-y-2">
-                        <div className={cn("flex items-center", isCollapsed ? "md:justify-center" : "px-3 justify-between")}>
-                            <ModeToggle />
-                            <span className={cn("text-sm font-medium text-muted-foreground ml-2", isCollapsed && "md:hidden")}>Theme</span>
+                    {/* Footer */}
+                    <div className="mt-auto pt-3 border-t border-border/20">
+                        <div className={cn(
+                            "flex items-center",
+                            isCollapsed ? "md:justify-center" : "gap-3 px-1"
+                        )}>
+                            {/* Avatar */}
+                            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-semibold flex-shrink-0">
+                                {userInitial}
+                            </div>
+
+                            {/* Name + Plan */}
+                            <div className={cn("flex-1 min-w-0", isCollapsed && "md:hidden")}>
+                                <p className="text-sm font-medium text-foreground truncate leading-tight">{userDisplayName}</p>
+                                <p className="text-[11px] text-muted-foreground/50 leading-tight">Free plan</p>
+                            </div>
+
+                            {/* Actions */}
+                            <div className={cn("flex items-center gap-0.5 flex-shrink-0", isCollapsed && "md:hidden")}>
+                                <ModeToggle />
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-muted-foreground/40 hover:text-foreground"
+                                    onClick={handleLogout}
+                                    title="Sign out"
+                                >
+                                    <LogOut className="h-3.5 w-3.5" />
+                                </Button>
+                            </div>
                         </div>
                     </div>
                 </div>

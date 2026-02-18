@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip } from "lucide-react";
 import Link from "next/link";
 import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
@@ -11,6 +11,20 @@ import { MemoryManager } from "@/components/projects/MemoryManager";
 import { VisibilityToggle } from "@/components/projects/VisibilityToggle";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { createClient } from "@/lib/supabase/client";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+const MODELS = [
+    { id: "anthropic:claude-opus-4-6", label: "Opus 4.6" },
+    { id: "anthropic:claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { id: "google_genai:gemini-3-pro-preview", label: "Gemini 3 Pro" },
+    { id: "google_genai:gemini-3-flash-preview", label: "Gemini 3 Flash" },
+    { id: "openai:gpt-5.2", label: "GPT 5.2" },
+];
 
 interface Chat {
     id: string;
@@ -40,6 +54,8 @@ export function ProjectPageClient({
     const [chats, setChats] = useState<Chat[]>(initialChats);
     // const [loadingChat, setLoadingChat] = useState(false); // Removed
     const [inputValue, setInputValue] = useState("");
+    const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Removed useEffect for loading messages
 
@@ -49,7 +65,11 @@ export function ProjectPageClient({
             const result = await createNewChat(project.id);
 
             if (result.id) {
-                // Redirect to the new chat page
+                // Store initial message and model so the chat page can auto-send it
+                if (initialMessage) {
+                    sessionStorage.setItem(`chat_initial_${result.id}`, initialMessage);
+                }
+                sessionStorage.setItem(`chat_model_${result.id}`, selectedModel.id);
                 router.push(`/projects/${project.id}/chat/${result.id}`);
             }
         } catch (err) {
@@ -138,11 +158,49 @@ export function ProjectPageClient({
                                         }}
                                     />
                                     <div className="flex items-center justify-between px-2">
-                                        <Button variant="ghost" size="icon" type="button" className="text-muted-foreground hover:text-foreground">
-                                            <Plus className="h-6 w-6" />
-                                        </Button>
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-sm text-muted-foreground hidden sm:inline-block">Opus 4.6 Extended</span>
+                                        <div>
+                                            <input
+                                                ref={fileInputRef}
+                                                type="file"
+                                                className="hidden"
+                                                accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.json,.md,image/*"
+                                                multiple
+                                            />
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                type="button"
+                                                className="text-muted-foreground hover:text-foreground"
+                                                onClick={() => fileInputRef.current?.click()}
+                                            >
+                                                <Paperclip className="h-5 w-5" />
+                                            </Button>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        type="button"
+                                                        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 rounded-lg"
+                                                    >
+                                                        {selectedModel.label}
+                                                        <ChevronDown className="h-3 w-3 opacity-50" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="min-w-[160px]">
+                                                    {MODELS.map((m) => (
+                                                        <DropdownMenuItem
+                                                            key={m.id}
+                                                            onClick={() => setSelectedModel(m)}
+                                                            className={selectedModel.id === m.id ? "bg-accent" : ""}
+                                                        >
+                                                            {m.label}
+                                                        </DropdownMenuItem>
+                                                    ))}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
                                             <Button
                                                 type="submit"
                                                 size="icon"
