@@ -99,7 +99,7 @@ export function AppBuilderInterface() {
     };
 
     return (
-        <div className="flex h-screen w-full bg-background overflow-hidden text-foreground">
+        <div className="flex h-full w-full bg-background overflow-hidden text-foreground">
             {/* Left Sidebar: Chat Interface */}
             <div className={cn(
                 "flex flex-col border-r bg-card/30 backdrop-blur-sm transition-all duration-300 relative z-20",

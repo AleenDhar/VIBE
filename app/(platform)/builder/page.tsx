@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function BuilderPage() {
     return (
-        <div className="h-[calc(100vh-64px)] w-full overflow-hidden bg-background">
+        <div className="h-full w-full overflow-hidden bg-background">
             {/* Note: The MainLayout usually provides the sidebar and header structure, 
                  but the AppBuilderInterface takes over full screen mostly. 
                  However, the Sidebar component is already rendered by layout.tsx in (platform).
