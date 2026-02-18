@@ -36,15 +36,15 @@ export async function deleteDocument(documentId: string) {
         return { error: "Unauthorized" };
     }
 
-    // Get the document to verify ownership via project
+    // Get the document to find its project
     const { data: doc } = await supabase
         .from("documents")
-        .select("project_id, projects!inner(owner_id)")
+        .select("project_id")
         .eq("id", documentId)
         .single();
 
-    if (!doc || (doc as any).projects.owner_id !== user.id) {
-        return { error: "Unauthorized" };
+    if (!doc) {
+        return { error: "Document not found" };
     }
 
     const { error } = await supabase
@@ -57,6 +57,6 @@ export async function deleteDocument(documentId: string) {
         return { error: error.message };
     }
 
-    revalidatePath(`/projects/${(doc as any).project_id}`);
+    revalidatePath(`/projects/${doc.project_id}`);
     return { success: true };
 }
