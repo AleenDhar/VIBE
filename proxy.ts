@@ -18,13 +18,13 @@ export async function proxy(request: NextRequest) {
             return redirectResponse;
         };
 
-        // Authenticated users visiting the landing page or login URL should go to projects
+        // Authenticated users visiting the landing page should go to chat
         if (user && request.nextUrl.pathname === "/") {
-            return createRedirect("/projects");
+            return createRedirect("/chat");
         }
 
         // Define protected routes (add/remove as needed)
-        const protectedRoutes = ["/dashboard", "/projects", "/admin", "/analytics"];
+        const protectedRoutes = ["/chat", "/projects", "/admin"];
 
         // Check if current path matches any protected route
         const isProtectedRoute = protectedRoutes.some(route =>

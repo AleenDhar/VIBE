@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
-import { ChatInterface } from "@/components/chat/ChatInterface";
+import { StandaloneChatClient } from "@/components/chat/StandaloneChatClient";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +42,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
     return (
         <div className="flex flex-col h-full gap-2">
             <div className="h-full">
-                <ChatInterface
+                <StandaloneChatClient
                     projectId={projectId}
                     chatId={chatId}
                     initialMessages={messages || []}
