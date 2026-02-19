@@ -145,6 +145,8 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         return newContent;
     }
 
+    const [appConfig, setAppConfig] = useState<any>(null);
+
     // Load session data from DB on mount
     useEffect(() => {
         const supabase = supabaseRef.current;
@@ -161,6 +163,19 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             if (session) {
                 setSessionTitle(session.title || "Untitled App");
                 if (session.system_prompt) setSystemPrompt(session.system_prompt);
+            }
+
+            // Load latest artifact config
+            const { data: latestArtifact } = await supabase
+                .from("builder_artifacts")
+                .select("code, config")
+                .eq("session_id", sessionId)
+                .order("version", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+            if (latestArtifact?.config) {
+                setAppConfig(latestArtifact.config);
             }
 
             // Load messages
@@ -182,10 +197,14 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                 });
                 setMessages(loaded);
 
-                // Find the latest assistant message with code to restore preview
-                const lastAssistantWithCode = [...loaded].reverse().find(m => m.role === "assistant" && m.hasCode);
-                if (lastAssistantWithCode) {
-                    setGeneratedCode(extractHtmlCode(lastAssistantWithCode.content));
+                // If we didn't get code from artifacts, extract from messages
+                if (!latestArtifact?.code) {
+                    const lastAssistantWithCode = [...loaded].reverse().find(m => m.role === "assistant" && m.hasCode);
+                    if (lastAssistantWithCode) {
+                        setGeneratedCode(extractHtmlCode(lastAssistantWithCode.content));
+                    }
+                } else {
+                    setGeneratedCode(latestArtifact.code);
                 }
 
                 // Check if last message is a user message with no following assistant message
@@ -201,9 +220,9 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         loadSession();
     }, [sessionId]);
 
-    // Error Listener
+    // Message Listener (Errors & Persisted Saves)
     useEffect(() => {
-        const handleMessage = (event: MessageEvent) => {
+        const handleMessage = async (event: MessageEvent) => {
             if (event.data?.type === "runtime_error") {
                 setErrors(prev => [...prev, {
                     message: event.data.message,
@@ -212,17 +231,80 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                     timestamp: Date.now()
                 }]);
             }
+
+            // Handle Full Artifact Saves (Code + Config)
+            if (event.data?.type === "SAVE_ARTIFACT" && event.data.code) {
+                const newCode = event.data.code;
+                const newConfig = event.data.config || appConfig;
+                const supabase = supabaseRef.current;
+
+                try {
+                    const { count } = await supabase
+                        .from("builder_artifacts")
+                        .select("*", { count: "exact", head: true })
+                        .eq("session_id", sessionId);
+
+                    await supabase.from("builder_artifacts").insert({
+                        session_id: sessionId,
+                        code: newCode,
+                        config: newConfig,
+                        version: (count || 0) + 1,
+                    });
+
+                    setGeneratedCode(newCode);
+                    if (newConfig) setAppConfig(newConfig);
+                    console.log("[Builder] Artifact saved successfully (Full)");
+                } catch (err) {
+                    console.error("[Builder] Failed to save artifact:", err);
+                }
+            }
+
+            // Handle Light Config-Only Saves
+            if (event.data?.type === "SAVE_SITE_CONFIG" && event.data.config) {
+                const newConfig = event.data.config;
+                const supabase = supabaseRef.current;
+
+                try {
+                    // Save to DB (as a new artifact version but with same code)
+                    const { count } = await supabase
+                        .from("builder_artifacts")
+                        .select("*", { count: "exact", head: true })
+                        .eq("session_id", sessionId);
+
+                    await supabase.from("builder_artifacts").insert({
+                        session_id: sessionId,
+                        code: generatedCode,
+                        config: newConfig,
+                        version: (count || 0) + 1,
+                    });
+
+                    setAppConfig(newConfig);
+                    console.log("[Builder] Site config updated persistently");
+                } catch (err) {
+                    console.error("[Builder] Failed to save site config:", err);
+                }
+            }
+
+            // NEW: Send config to iframe when it's ready
+            if (event.data?.type === "IFRAME_READY" && appConfig) {
+                iframeRef.current?.contentWindow?.postMessage({
+                    type: "INIT_CONFIG",
+                    config: appConfig
+                }, "*");
+                console.log("[Builder] Sent INIT_CONFIG to iframe");
+            }
         };
         window.addEventListener("message", handleMessage);
         return () => window.removeEventListener("message", handleMessage);
-    }, []);
+    }, [sessionId, generatedCode, appConfig]);
 
-    // Enhance generated code with error reporting
+    // Enhance generated code with error reporting and cloud config support
     const getEnhancedCode = useCallback((code: string) => {
         if (!code) return "";
-        const errorReporter = `
+        const injection = `
 <script>
     (function() {
+        // Universal Error Reporter
         const reportError = (message, stack, type) => {
             window.parent.postMessage({
                 type: 'runtime_error',
@@ -241,16 +323,51 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         const originalConsoleError = console.error;
         console.error = (...args) => {
             reportError(args.join(' '), null, 'Console Error');
-            originalConsoleError.apply(console, args);
+            if (originalConsoleError) originalConsoleError.apply(console, args);
         };
+
+        // Self-Saving Artifact Helper (Code + Config)
+        window.saveArtifact = (config) => {
+            document.querySelectorAll('input, textarea').forEach(el => {
+                if (el.tagName === 'TEXTAREA') {
+                    el.textContent = (el as HTMLTextAreaElement).value; 
+                } else {
+                    el.setAttribute('value', (el as HTMLInputElement).value);
+                }
+            });
+
+            setTimeout(() => {
+                const htmlString = document.documentElement.outerHTML;
+                window.parent.postMessage({
+                    type: 'SAVE_ARTIFACT',
+                    code: htmlString.startsWith('<!DOCTYPE') ? htmlString : '<!DOCTYPE html>\\n' + htmlString,
+                    config: config || (window.getAppConfig ? window.getAppConfig() : null)
+                }, '*');
+            }, 100);
+        };
+
+        // Site Config Persistent Helper (Config Only)
+        window.saveConfig = (config) => {
+            window.parent.postMessage({ type: 'SAVE_SITE_CONFIG', config: config }, '*');
+        };
+
+        // Handshake Step: Parent will respond with INIT_CONFIG
+        window.parent.postMessage({ type: 'IFRAME_READY' }, '*');
+
+        // Handle incoming config from parent
+        window.addEventListener('message', (event) => {
+            if (event.data.type === 'INIT_CONFIG' && window.onConfigLoad) {
+                window.onConfigLoad(event.data.config);
+            }
+        });
     })();
 </script>
         `;
         // Inject before </body>
         if (code.includes("</body>")) {
-            return code.replace("</body>", `${errorReporter}</body>`);
+            return code.replace("</body>", injection + "</body>");
         }
-        return code + errorReporter;
+        return code + injection;
     }, []);
 
     // Auto-run: if redirected from landing with a prompt
@@ -324,7 +441,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.error("API error:", response.status, errorText);
-                throw new Error(`API error: ${response.status}`);
+                throw new Error(`API error: ${response.status} `);
             }
 
             // Read streaming response
@@ -438,7 +555,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             setMessages(prev => [...prev, {
                 id: crypto.randomUUID(),
                 role: "assistant",
-                content: `🚨 **Build Error:** ${errorMessage}\n\nThe AI architect might be overwhelmed or the connection was lost. Please try a simpler prompt or refresh the page.`,
+                content: `🚨 ** Build Error:** ${errorMessage} \n\nThe AI architect might be overwhelmed or the connection was lost.Please try a simpler prompt or refresh the page.`,
             }]);
             scrollToBottom();
         } finally {
@@ -849,8 +966,8 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                             variant="destructive"
                                             size="sm"
                                             onClick={() => {
-                                                const errorLog = errors.map(e => `[${e.type}] ${e.message}`).join('\n');
-                                                setInput(`I am getting the following errors in the app. Please fix them:\n\n${errorLog}`);
+                                                const errorLog = errors.map(e => `[${e.type}] ${e.message} `).join('\n');
+                                                setInput(`I am getting the following errors in the app.Please fix them: \n\n${errorLog} `);
                                                 setIsSidebarOpen(true);
                                             }}
                                         >
@@ -959,7 +1076,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                     <div className="bg-muted/50 border rounded-xl p-4 flex items-center justify-between gap-4">
                                         <span className="text-sm font-mono truncate text-indigo-400">{window.location.origin}{publishedUrl}</span>
                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => {
-                                            navigator.clipboard.writeText(`${window.location.origin}${publishedUrl}`);
+                                            navigator.clipboard.writeText(`${window.location.origin}${publishedUrl} `);
                                         }}>
                                             <Copy className="h-3.5 w-3.5" />
                                         </Button>

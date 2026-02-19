@@ -32,25 +32,34 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             if (type === 'thinking' || type === 'tool_call' || type === 'tool_result') {
                 if (lastMsg && lastMsg.role === 'assistant') {
                     // Add to existing assistant message's thinking steps
+                    // Add to existing assistant message's thinking steps
                     if (type === 'thinking') {
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), msg.content];
+                        // Safely parse metadata
+                        const meta = typeof msg.metadata === 'string' ? (JSON.parse(msg.metadata) || {}) : (msg.metadata || {});
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), { type: 'thinking', content: msg.content, metadata: meta }];
                     } else if (type === 'tool_call') {
+                        // Safely parse metadata
+                        const meta = typeof msg.metadata === 'string' ? (JSON.parse(msg.metadata) || {}) : (msg.metadata || {});
                         let args = "";
-                        if (msg.metadata && msg.metadata.args) {
-                            try {
-                                args = typeof msg.metadata.args === 'string' ? msg.metadata.args : JSON.stringify(msg.metadata.args, null, 2);
-                            } catch (e) { args = JSON.stringify(msg.metadata.args); }
-                        }
-                        const toolInfo = `Called **${msg.metadata?.tool || msg.metadata?.name || "Unknown Tool"}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), toolInfo];
+                        const rawArgs = msg.args || meta.args || {};
+                        try {
+                            args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
+                        } catch (e) { args = JSON.stringify(rawArgs); }
+
+                        const toolName = msg.tool || meta.tool || meta.name || meta.tool_name || "Unknown Tool";
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), {
+                            type: 'tool_call',
+                            tool: toolName,
+                            args: args
+                        }];
                     } else if (type === 'tool_result') {
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), `Result: ${msg.content}`];
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), { type: 'tool_result', content: msg.content }];
                     }
                 } else {
                     // No assistant message to attach to - create a placeholder
                     const newMsg = {
                         ...msg,
-                        thinkingSteps: type === 'thinking' ? [msg.content] : [],
+                        thinkingSteps: type === 'thinking' ? [{ type: 'thinking', content: msg.content }] : [],
                         isProcessing: true, // Default to processing until we see a final message
                         content: ""
                     };
@@ -203,20 +212,23 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 return prev.map((msg, index, array) => {
                                     if (index !== findLastAssistantIndex(array)) return msg;
 
-                                    let newStep = "";
+                                    let newStep: any = null;
                                     if (messageType === 'thinking') {
-                                        newStep = newMsg.content;
+                                        const metaRaw = newMsg.metadata || {};
+                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
+                                        newStep = { type: 'thinking', content: newMsg.content, metadata: meta };
                                     } else if (messageType === 'tool_call') {
                                         let args = "";
-                                        const meta = newMsg.metadata || {};
+                                        const metaRaw = newMsg.metadata || {};
+                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
                                         const rawArgs = newMsg.args || meta.args || {};
                                         try {
                                             args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
                                         } catch (e) { args = JSON.stringify(rawArgs); }
-                                        const toolName = newMsg.tool || meta.tool || meta.name || "Unknown Tool";
-                                        newStep = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+                                        const toolName = newMsg.tool || meta.tool || meta.name || meta.tool_name || "Unknown Tool";
+                                        newStep = { type: 'tool_call', tool: toolName, args: args };
                                     } else if (messageType === 'tool_result') {
-                                        newStep = `Result: ${newMsg.content}`;
+                                        newStep = { type: 'tool_result', content: newMsg.content };
                                     }
 
                                     return {
@@ -484,31 +496,37 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                             content: (lastMsg.content || "") + text
                                         };
                                     } else if (data.type === 'tool_call') {
-                                        const meta = data.metadata || {};
+                                        const metaRaw = data.metadata || {};
+                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
                                         let args = "";
                                         const rawArgs = data.args || meta.args || {};
                                         try {
                                             args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
                                         } catch (e) { args = JSON.stringify(rawArgs); }
 
-                                        const toolName = data.tool || meta.tool || meta.name || "Unknown Tool";
-                                        const toolInfo = `Called **${toolName}**${args ? ` with args:\n\`\`\`json\n${args}\n\`\`\`` : ""}`;
+                                        const toolName = data.tool || meta.tool || meta.name || meta.tool_name || "Unknown Tool";
+                                        const toolStep = { type: 'tool_call', tool: toolName, args: args };
 
                                         newMessages[lastMsgIndex] = {
                                             ...newMessages[lastMsgIndex],
-                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), toolInfo],
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), toolStep],
                                             isProcessing: true
                                         };
                                     } else if (data.type === 'tool_result') {
                                         const resultText = data.content;
+                                        const resultStep = { type: 'tool_result', content: resultText };
+
                                         newMessages[lastMsgIndex] = {
                                             ...newMessages[lastMsgIndex],
-                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), `Result: ${resultText}`]
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), resultStep]
                                         };
                                     } else if (data.type === 'thinking') {
+                                        const metaRaw = data.metadata || {};
+                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
+                                        const thinkStep = { type: 'thinking', content: data.content, metadata: meta };
                                         newMessages[lastMsgIndex] = {
                                             ...newMessages[lastMsgIndex],
-                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), data.content]
+                                            thinkingSteps: [...(lastMsg.thinkingSteps || []), thinkStep]
                                         };
                                     } else if (data.type === 'status') {
                                         setThinkingText(data.content || "Processing...");
@@ -803,18 +821,98 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
                                     return (
                                         <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed">
-                                            {thinkingContent && (
-                                                <details className="group mb-4">
-                                                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground/80 flex items-center select-none list-none gap-2 transition-colors">
-                                                        <span className="opacity-70 transition-transform group-open:rotate-90">›</span>
-                                                        Thought for a few seconds
-                                                    </summary>
-                                                    <div className="mt-2 pl-3 border-l-2 border-border/50 text-xs text-muted-foreground/80 overflow-hidden">
-                                                        <div className="whitespace-pre-wrap break-words overflow-wrap-anywhere max-w-full">
-                                                            {thinkingContent}
-                                                        </div>
-                                                    </div>
-                                                </details>
+                                            {/* Render Mixed Thoughts & Toggles */}
+                                            {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
+                                                <div className="flex flex-col gap-2 mb-4 w-full">
+                                                    {(() => {
+                                                        const groups: any[] = [];
+                                                        let currentToolGroup: any[] = [];
+
+                                                        msg.thinkingSteps.forEach((step: any) => {
+                                                            if (step.type === 'tool_call' || step.type === 'tool_result') {
+                                                                currentToolGroup.push(step);
+                                                            } else {
+                                                                if (currentToolGroup.length > 0) {
+                                                                    groups.push({ type: 'tool_group', steps: currentToolGroup });
+                                                                    currentToolGroup = [];
+                                                                }
+                                                                groups.push(step);
+                                                            }
+                                                        });
+                                                        if (currentToolGroup.length > 0) {
+                                                            groups.push({ type: 'tool_group', steps: currentToolGroup });
+                                                        }
+
+                                                        return groups.map((group: any, idx: number) => {
+                                                            if (group.type === 'tool_group') {
+                                                                const toolCount = group.steps.filter((s: any) => s.type === 'tool_call').length;
+                                                                return (
+                                                                    <details key={idx} className="group border border-border/50 rounded-lg bg-muted/30 overflow-hidden mb-2">
+                                                                        <summary className="flex items-center gap-2 p-2 px-3 text-xs font-medium cursor-pointer hover:bg-muted/50 select-none transition-colors text-muted-foreground">
+                                                                            <div className="flex items-center justify-center h-4 w-4 transition-transform group-open:rotate-90">
+                                                                                <ChevronDown className="h-3 w-3" />
+                                                                            </div>
+                                                                            <span>Used {toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
+                                                                        </summary>
+                                                                        <div className="p-2 border-t border-border/40 flex flex-col gap-2 bg-background/30">
+                                                                            {group.steps.map((step: any, stepIdx: number) => {
+                                                                                if (step.type === 'tool_call') {
+                                                                                    return (
+                                                                                        <div key={stepIdx} className="border border-border/50 rounded overflow-hidden">
+                                                                                            <div className="bg-muted/50 px-2 py-1 text-[10px] font-mono text-primary/70 border-b border-border/50 flex items-center justify-between">
+                                                                                                <span>Calling {step.tool}...</span>
+                                                                                            </div>
+                                                                                            <pre className="text-[10px] bg-background/50 p-2 overflow-x-auto text-muted-foreground m-0">
+                                                                                                {step.args && (typeof step.args === 'string' ? step.args : JSON.stringify(step.args, null, 2))}
+                                                                                            </pre>
+                                                                                        </div>
+                                                                                    );
+                                                                                }
+                                                                                if (step.type === 'tool_result') {
+                                                                                    return (
+                                                                                        <details key={stepIdx} className="group/res border border-emerald-500/20 rounded bg-emerald-500/5 overflow-hidden">
+                                                                                            <summary className="flex items-center gap-2 px-2 py-1 text-[10px] font-medium cursor-pointer hover:bg-emerald-500/10 select-none transition-colors text-emerald-600/80">
+                                                                                                <div className="flex items-center justify-center h-3 w-3 transition-transform group-open/res:rotate-90">
+                                                                                                    <ChevronDown className="h-2 w-2" />
+                                                                                                </div>
+                                                                                                <span>Result</span>
+                                                                                            </summary>
+                                                                                            <div className="p-2 pt-0 pl-6 border-t border-transparent group-open/res:border-emerald-500/10">
+                                                                                                <pre className="text-[10px] whitespace-pre-wrap text-muted-foreground mt-1 max-h-[200px] overflow-y-auto font-mono">
+                                                                                                    {step.content}
+                                                                                                </pre>
+                                                                                            </div>
+                                                                                        </details>
+                                                                                    );
+                                                                                }
+                                                                                return null;
+                                                                            })}
+                                                                        </div>
+                                                                    </details>
+                                                                );
+                                                            }
+
+                                                            // Handle string/thinking steps
+                                                            const content = typeof group === 'string' ? group : group.content;
+                                                            // Check for agent_reasoning metadata
+                                                            const isAgentReasoning = group.metadata?.source === 'agent_reasoning';
+
+                                                            if (isAgentReasoning) {
+                                                                return (
+                                                                    <div key={idx} className="text-foreground/90 whitespace-pre-wrap mb-3 leading-relaxed">
+                                                                        {content}
+                                                                    </div>
+                                                                );
+                                                            }
+
+                                                            return (
+                                                                <div key={idx} className="py-1  mb-2">
+                                                                    {content}
+                                                                </div>
+                                                            );
+                                                        });
+                                                    })()}
+                                                </div>
                                             )}
 
                                             {displayContent && (

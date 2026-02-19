@@ -33,6 +33,36 @@ CAPABILITIES:
   - \`/api/agent\` handles project name lookup, chat history, and API keys automatically.
   - Generating UUIDs is preferred but string IDs are supported.
 - **Data Export**: Generate CSV downloads using Blob and URL.createObjectURL.
+- **Cloud Config**: Persistent data (like editable prompts) should be stored in the "App Config" rather than hardcoded in HTML.
+  - **Pattern**:
+    1. **Load**: Define \`window.onConfigLoad = (config) => { ... }\` to handle incoming data from the cloud on startup.
+    2. **Save**: Call \`window.saveConfig(myNewConfig)\` to persist data to the cloud database instantly.
+    3. **Hybrid**: Use \`window.saveArtifact(myConfig)\` if you need to save both the updated UI (HTML) and the config at once.
+  - **Advantage**: This is far more reliable than editing the DOM. Use this for system prompts, settings, or dashboard configurations.
+
+EXAMPLE PERSISTENT APP:
+\`\`\`html
+<!DOCTYPE html>
+<html lang="en">
+<script>
+  let myPrompts = { 1: "Default..." };
+
+  // Handle data from Cloud on startup
+  window.onConfigLoad = (config) => {
+    if (config?.prompts) {
+       myPrompts = config.prompts;
+       renderUI();
+    }
+  };
+
+  function handleSave(newVal) {
+    myPrompts[1] = newVal;
+    // Persist only the data to the cloud
+    window.saveConfig({ prompts: myPrompts });
+  }
+</script>
+</html>
+\`\`\`
 
 EXAMPLE RESPONSE FORMAT:
 Here's your dashboard app:
