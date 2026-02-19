@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter, useSearchParams } from "next/navigation";
+import { DEFAULT_BUILDER_SYSTEM_PROMPT } from "@/lib/builder-constants";
 import {
     Send,
     Sparkles,
@@ -70,6 +71,11 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
     const [publishError, setPublishError] = useState("");
     const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
 
+    // System Prompt state
+    const [systemPrompt, setSystemPrompt] = useState("");
+    const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
+    const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+
     const [previewMode, setPreviewMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
     const [viewMode, setViewMode] = useState<"preview" | "code" | "errors">("preview");
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -92,10 +98,21 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         return text.replace(/```[\s\S]*?```/g, "").trim();
     }
 
-    // Extract HTML code from text
+    // Extract HTML code from text (robustly handles streaming/partial blocks)
     function extractHtmlCode(text: string): string {
-        const match = text.match(/```html([\s\S]*?)```/);
-        return match ? match[1].trim() : "";
+        // Try complete block first
+        const fullMatch = text.match(/```html([\s\S]*?)```/);
+        if (fullMatch) return fullMatch[1].trim();
+
+        // Fallback for streaming: if block is open but not yet closed
+        const partialMatch = text.match(/```html([\s\S]*)$/);
+        if (partialMatch) return partialMatch[1].trim();
+
+        // Final fallback: look for content between <html> tags if backticks are missing
+        const htmlMatch = text.match(/<html[\s\S]*?<\/html>/i);
+        if (htmlMatch) return htmlMatch[0];
+
+        return "";
     }
 
     // Load session data from DB on mount
@@ -107,12 +124,13 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             // Load session info
             const { data: session } = await supabase
                 .from("builder_sessions")
-                .select("title")
+                .select("title, system_prompt")
                 .eq("id", sessionId)
-                .single();
+                .maybeSingle();
 
             if (session) {
                 setSessionTitle(session.title || "Untitled App");
+                if (session.system_prompt) setSystemPrompt(session.system_prompt);
             }
 
             // Load messages
@@ -270,7 +288,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             const response = await fetch("/api/builder", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ messages: apiMessages, sessionId }),
+                body: JSON.stringify({ messages: apiMessages, sessionId, systemPrompt }),
             });
 
             if (!response.ok) {
@@ -300,9 +318,21 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                             if (viewMode !== "preview") setViewMode("preview");
                         }
                     }
+                    console.log("[Builder] Stream finished. Total length:", fullResponse.length);
+                } catch (streamErr) {
+                    console.error("[Builder] Stream reading error:", streamErr);
+                    throw streamErr;
                 } finally {
                     reader.releaseLock();
                 }
+            } else {
+                console.error("[Builder] No response body found");
+                throw new Error("No response body");
+            }
+
+            if (!fullResponse.trim()) {
+                console.warn("[Builder] Received empty response from AI");
+                throw new Error("Received an empty response from the AI architect.");
             }
             // Final extraction
             const finalCode = extractHtmlCode(fullResponse);
@@ -352,17 +382,38 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                     console.error("DB error saving assistant message:", dbErr);
                 }
             }
-        } catch (err) {
-            console.error("Build error:", err);
+        } catch (err: any) {
+            console.error("Build error details:", err);
+            const errorMessage = err.message || "An unexpected error occurred.";
             setMessages(prev => [...prev, {
                 id: crypto.randomUUID(),
                 role: "assistant",
-                content: "Sorry, something went wrong. Please try again.",
+                content: `🚨 **Build Error:** ${errorMessage}\n\nThe AI architect might be overwhelmed or the connection was lost. Please try a simpler prompt or refresh the page.`,
             }]);
             scrollToBottom();
         } finally {
             // ALWAYS reset building state
             setIsBuilding(false);
+        }
+    };
+
+    const handleSavePrompt = async () => {
+        setIsSavingPrompt(true);
+        try {
+            const supabase = supabaseRef.current;
+            const { error } = await supabase
+                .from("builder_sessions")
+                .update({ system_prompt: systemPrompt, updated_at: new Date().toISOString() })
+                .eq("id", sessionId);
+
+            if (error) throw error;
+            setIsPromptModalOpen(false);
+        } catch (err) {
+            console.error("Error saving prompt:", err);
+            // Even if DB save fails (column missing), we'll keep it in state for the session
+            setIsPromptModalOpen(false);
+        } finally {
+            setIsSavingPrompt(false);
         }
     };
 
@@ -577,6 +628,15 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                 Building
                             </span>
                         )}
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            onClick={() => setIsPromptModalOpen(true)}
+                        >
+                            <Sparkles className="h-3 w-3" />
+                            System Prompt
+                        </Button>
                     </div>
 
                     <div className="flex items-center gap-1 bg-muted/50 p-1 rounded-lg border">
@@ -847,6 +907,70 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                     </div>
                                 </div>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* System Prompt Modal */}
+            {isPromptModalOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-card border shadow-2xl rounded-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                                        <Sparkles className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <h3 className="text-lg font-semibold">Custom System Prompt</h3>
+                                        <p className="text-sm text-muted-foreground">Override the default instructions for the AI builder.</p>
+                                    </div>
+                                </div>
+                                <Button variant="ghost" size="icon" onClick={() => setIsPromptModalOpen(false)}>
+                                    <MoreHorizontal className="h-4 w-4 rotate-45" />
+                                </Button>
+                            </div>
+
+                            <div className="space-y-2">
+                                <textarea
+                                    className="w-full h-[300px] bg-muted/50 border rounded-xl px-4 py-3 text-sm font-mono resize-none focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                                    placeholder="Enter custom system instructions here... (Leave empty to use default)"
+                                    value={systemPrompt}
+                                    onChange={(e) => setSystemPrompt(e.target.value)}
+                                />
+                                <p className="text-[11px] text-muted-foreground italic">
+                                    Note: If left empty, the architect uses its default system prompt for building vanilla JS/HTML apps.
+                                </p>
+                            </div>
+
+                            <div className="flex justify-between items-center pt-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setSystemPrompt(DEFAULT_BUILDER_SYSTEM_PROMPT)}
+                                    className="text-xs"
+                                >
+                                    Load Default Prompt
+                                </Button>
+                                <div className="flex gap-3">
+                                    <Button variant="ghost" onClick={() => setIsPromptModalOpen(false)}>
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        className="bg-primary text-primary-foreground min-w-[120px]"
+                                        onClick={handleSavePrompt}
+                                        disabled={isSavingPrompt}
+                                    >
+                                        {isSavingPrompt ? (
+                                            <>
+                                                <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                                                Saving...
+                                            </>
+                                        ) : "Save Prompt"}
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

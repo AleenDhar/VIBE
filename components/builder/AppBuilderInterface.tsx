@@ -47,13 +47,24 @@ function getFullText(msg: any): string {
     return "";
 }
 
-// Helper to extract HTML code from message
+// Helper to extract HTML code from message (robustly handles streaming/partial blocks)
 function extractHtmlCode(text: string): string {
-    const match = text.match(/```html([\s\S]*?)```/);
-    if (match) return match[1].trim();
+    // Try complete block first
+    const fullMatch = text.match(/```html([\s\S]*?)```/);
+    if (fullMatch) return fullMatch[1].trim();
+
+    // Fallback for streaming: if block is open but not yet closed
+    const partialMatch = text.match(/```html([\s\S]*)$/);
+    if (partialMatch) return partialMatch[1].trim();
+
     // Fallback: try tsx/jsx blocks too
-    const tsxMatch = text.match(/```(?:tsx?|jsx?)([\s\S]*?)```/);
+    const tsxMatch = text.match(/```(?:tsx?|jsx?)([\s\S]*?)(?:```|$)/);
     if (tsxMatch) return tsxMatch[1].trim();
+
+    // Final fallback: look for content between <html> tags
+    const htmlMatch = text.match(/<html[\s\S]*?<\/html>/i);
+    if (htmlMatch) return htmlMatch[0];
+
     return "";
 }
 
