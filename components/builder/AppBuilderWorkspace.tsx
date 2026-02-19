@@ -21,7 +21,10 @@ import {
     Copy,
     Check,
     ArrowLeft,
-    Loader2
+    Loader2,
+    AlertCircle,
+    Globe,
+    ExternalLink
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
@@ -31,6 +34,13 @@ interface ChatMessage {
     role: "user" | "assistant";
     content: string;
     hasCode?: boolean;
+}
+
+interface AppError {
+    message: string;
+    stack?: string;
+    type: string;
+    timestamp: number;
 }
 
 interface AppBuilderWorkspaceProps {
@@ -48,12 +58,20 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
     const [input, setInput] = useState("");
     const [isBuilding, setIsBuilding] = useState(false);
     const [generatedCode, setGeneratedCode] = useState("");
+    const [errors, setErrors] = useState<AppError[]>([]);
     const [sessionTitle, setSessionTitle] = useState("Untitled App");
     const [isLoadingSession, setIsLoadingSession] = useState(true);
     const [copied, setCopied] = useState(false);
 
+    // Publishing state
+    const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
+    const [publishSlug, setPublishSlug] = useState("");
+    const [isPublishing, setIsPublishing] = useState(false);
+    const [publishError, setPublishError] = useState("");
+    const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
+
     const [previewMode, setPreviewMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
-    const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
+    const [viewMode, setViewMode] = useState<"preview" | "code" | "errors">("preview");
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -116,6 +134,12 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                 });
                 setMessages(loaded);
 
+                // Find the latest assistant message with code to restore preview
+                const lastAssistantWithCode = [...loaded].reverse().find(m => m.role === "assistant" && m.hasCode);
+                if (lastAssistantWithCode) {
+                    setGeneratedCode(extractHtmlCode(lastAssistantWithCode.content));
+                }
+
                 // Check if last message is a user message with no following assistant message
                 // This is the case for autorun
                 const lastMsg = dbMessages[dbMessages.length - 1];
@@ -128,6 +152,58 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
 
         loadSession();
     }, [sessionId]);
+
+    // Error Listener
+    useEffect(() => {
+        const handleMessage = (event: MessageEvent) => {
+            if (event.data?.type === "runtime_error") {
+                setErrors(prev => [...prev, {
+                    message: event.data.message,
+                    stack: event.data.stack,
+                    type: event.data.errorType,
+                    timestamp: Date.now()
+                }]);
+            }
+        };
+        window.addEventListener("message", handleMessage);
+        return () => window.removeEventListener("message", handleMessage);
+    }, []);
+
+    // Enhance generated code with error reporting
+    const getEnhancedCode = useCallback((code: string) => {
+        if (!code) return "";
+        const errorReporter = `
+<script>
+    (function() {
+        const reportError = (message, stack, type) => {
+            window.parent.postMessage({
+                type: 'runtime_error',
+                message: message,
+                stack: stack,
+                errorType: type
+            }, '*');
+        };
+        window.onerror = (msg, url, line, col, error) => {
+            reportError(msg, error?.stack, 'Uncaught Error');
+            return false;
+        };
+        window.onunhandledrejection = (event) => {
+            reportError(event.reason?.message || event.reason, event.reason?.stack, 'Unhandled Rejection');
+        };
+        const originalConsoleError = console.error;
+        console.error = (...args) => {
+            reportError(args.join(' '), null, 'Console Error');
+            originalConsoleError.apply(console, args);
+        };
+    })();
+</script>
+        `;
+        // Inject before </body>
+        if (code.includes("</body>")) {
+            return code.replace("</body>", `${errorReporter}</body>`);
+        }
+        return code + errorReporter;
+    }, []);
 
     // Auto-run: if redirected from landing with a prompt
     useEffect(() => {
@@ -147,6 +223,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
     const buildApp = async (userPrompt: string, skipUserMessage: boolean = false) => {
         if (!userPrompt.trim() || isBuilding) return;
         setIsBuilding(true);
+        setErrors([]); // Clear errors on new build
 
         const supabase = supabaseRef.current;
 
@@ -314,6 +391,37 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             URL.revokeObjectURL(url);
         }
     }, [generatedCode, sessionTitle]);
+
+    const handlePublish = async () => {
+        if (!publishSlug.trim() || !generatedCode) {
+            setPublishError("Please enter a name for your app.");
+            return;
+        }
+        setIsPublishing(true);
+        setPublishError("");
+
+        try {
+            const response = await fetch("/api/builder/publish", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    slug: publishSlug.trim().toLowerCase(),
+                    htmlContent: getEnhancedCode(generatedCode)
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || "Failed to publish");
+            }
+
+            setPublishedUrl(data.url);
+        } catch (err: any) {
+            setPublishError(err.message);
+        } finally {
+            setIsPublishing(false);
+        }
+    };
 
     if (isLoadingSession) {
         return (
@@ -487,6 +595,23 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                             <Code className="h-3 w-3" />
                             Code
                         </Button>
+                        <Button
+                            variant="ghost" size="sm"
+                            className={cn(
+                                "h-7 px-2 gap-1.5 text-xs relative",
+                                viewMode === "errors" && "bg-background shadow-sm text-red-500",
+                                errors.length > 0 && viewMode !== "errors" && "text-red-400"
+                            )}
+                            onClick={() => setViewMode("errors")}
+                        >
+                            <AlertCircle className="h-3 w-3" />
+                            Errors
+                            {errors.length > 0 && (
+                                <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] text-white">
+                                    {errors.length}
+                                </span>
+                            )}
+                        </Button>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -512,15 +637,32 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                     <Download className="h-3 w-3" />
                                     Export
                                 </Button>
+                                <Button
+                                    variant="default"
+                                    size="sm"
+                                    className="h-8 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white border-0 shadow-lg"
+                                    onClick={() => {
+                                        setPublishSlug(sessionTitle.replace(/[^a-z0-9]/gi, "-").toLowerCase());
+                                        setIsPublishDialogOpen(true);
+                                        setPublishedUrl(null);
+                                        setPublishError("");
+                                    }}
+                                >
+                                    <Globe className="h-3 w-3" />
+                                    Publish
+                                </Button>
                             </>
                         )}
                     </div>
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 relative bg-dots-pattern overflow-auto p-4 md:p-8 flex items-start justify-center">
+                <div className="flex-1 relative overflow-auto p-4 md:p-8 flex items-start justify-center">
+                    {/* Background Pattern Layer */}
+                    <div className="absolute inset-0 bg-dots-pattern pointer-events-none" />
+
                     <div className={cn(
-                        "bg-background border shadow-2xl transition-all duration-300 flex flex-col overflow-hidden relative",
+                        "bg-background border shadow-2xl transition-all duration-300 flex flex-col overflow-hidden relative z-10",
                         previewMode === "desktop" ? "w-full max-w-5xl h-full rounded-xl" : "",
                         previewMode === "tablet" ? "w-[768px] h-[1024px] max-h-full rounded-[2rem] border-[8px] border-muted-foreground/10" : "",
                         previewMode === "mobile" ? "w-[375px] h-[812px] max-h-full rounded-[2.5rem] border-[8px] border-muted-foreground/10" : ""
@@ -529,7 +671,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                             generatedCode ? (
                                 <iframe
                                     ref={iframeRef}
-                                    srcDoc={generatedCode}
+                                    srcDoc={getEnhancedCode(generatedCode)}
                                     className="w-full h-full border-0 bg-white" // Force solid background
                                     sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
                                     title="App Preview"
@@ -550,7 +692,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                     )}
                                 </div>
                             )
-                        ) : (
+                        ) : viewMode === "code" ? (
                             <div className="h-full w-full overflow-auto bg-[#1e1e2e] relative">
                                 <div className="sticky top-0 flex items-center justify-between px-4 py-2 bg-[#1e1e2e]/90 backdrop-blur border-b border-white/5 z-10">
                                     <span className="text-xs text-zinc-500 font-mono">app.html</span>
@@ -563,10 +705,151 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                                     {generatedCode || "// No code generated yet.\n// Describe your app in the chat to get started."}
                                 </pre>
                             </div>
+                        ) : (
+                            <div className="h-full w-full overflow-auto bg-background p-6">
+                                <div className="flex items-center justify-between mb-6">
+                                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                                        <AlertCircle className="h-5 w-5 text-red-500" />
+                                        Runtime Console
+                                    </h3>
+                                    {errors.length > 0 && (
+                                        <Button
+                                            variant="destructive"
+                                            size="sm"
+                                            onClick={() => {
+                                                const errorLog = errors.map(e => `[${e.type}] ${e.message}`).join('\n');
+                                                setInput(`I am getting the following errors in the app. Please fix them:\n\n${errorLog}`);
+                                                setIsSidebarOpen(true);
+                                            }}
+                                        >
+                                            Fix Errors with AI
+                                        </Button>
+                                    )}
+                                </div>
+
+                                {errors.length > 0 ? (
+                                    <div className="space-y-3">
+                                        {errors.map((error, idx) => (
+                                            <div key={idx} className="p-4 rounded-lg bg-red-500/5 border border-red-500/20 font-mono text-xs">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="text-red-500 font-bold">{error.type}</span>
+                                                    <span className="text-muted-foreground">{new Date(error.timestamp).toLocaleTimeString()}</span>
+                                                </div>
+                                                <div className="text-foreground break-words">{error.message}</div>
+                                                {error.stack && (
+                                                    <pre className="mt-2 p-2 bg-black/20 rounded overflow-x-auto text-muted-foreground scale-95 origin-left">
+                                                        {error.stack}
+                                                    </pre>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center h-[60%] text-muted-foreground italic">
+                                        No runtime errors detected.
+                                    </div>
+                                )}
+                            </div>
                         )}
                     </div>
                 </div>
             </div>
+
+            {/* Publish Dialog */}
+            {isPublishDialogOpen && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
+                    <div className="bg-card border shadow-2xl rounded-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="p-6 space-y-4">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                                    <Globe className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-semibold">Publish Your App</h3>
+                                    <p className="text-sm text-muted-foreground">Make your app accessible via a public link.</p>
+                                </div>
+                            </div>
+
+                            {!publishedUrl ? (
+                                <div className="space-y-4 pt-2">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Choose a name (URL slug)</label>
+                                        <div className="flex items-center gap-2 bg-muted/50 border rounded-lg px-3 py-2 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
+                                            <span className="text-muted-foreground/50 text-sm select-none">/</span>
+                                            <input
+                                                autoFocus
+                                                type="text"
+                                                className="bg-transparent border-none outline-none text-sm flex-1 font-mono"
+                                                placeholder="my-cool-app"
+                                                value={publishSlug}
+                                                onChange={(e) => setPublishSlug(e.target.value.replace(/[^a-z0-9-]/gi, "-").toLowerCase())}
+                                                onKeyDown={(e) => e.key === "Enter" && handlePublish()}
+                                            />
+                                        </div>
+                                        <p className="text-[10px] text-muted-foreground">Only lowercase letters, numbers, and dashes allowed.</p>
+                                    </div>
+
+                                    {publishError && (
+                                        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs flex items-center gap-2">
+                                            <AlertCircle className="h-3 w-3" />
+                                            {publishError}
+                                        </div>
+                                    )}
+
+                                    <div className="flex gap-3 pt-2">
+                                        <Button variant="ghost" className="flex-1" onClick={() => setIsPublishDialogOpen(false)} disabled={isPublishing}>
+                                            Cancel
+                                        </Button>
+                                        <Button
+                                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+                                            onClick={handlePublish}
+                                            disabled={isPublishing || !publishSlug.trim()}
+                                        >
+                                            {isPublishing ? (
+                                                <>
+                                                    <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                                                    Publishing...
+                                                </>
+                                            ) : "Publish Now"}
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-6 pt-2 text-center py-4">
+                                    <div className="flex flex-col items-center gap-2">
+                                        <div className="h-12 w-12 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-500 mb-2">
+                                            <Check className="h-6 w-6" />
+                                        </div>
+                                        <h4 className="font-medium text-lg text-foreground">Successfully Published!</h4>
+                                        <p className="text-sm text-muted-foreground">Your app is now live at the link below:</p>
+                                    </div>
+
+                                    <div className="bg-muted/50 border rounded-xl p-4 flex items-center justify-between gap-4">
+                                        <span className="text-sm font-mono truncate text-indigo-400">{window.location.origin}{publishedUrl}</span>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" onClick={() => {
+                                            navigator.clipboard.writeText(`${window.location.origin}${publishedUrl}`);
+                                        }}>
+                                            <Copy className="h-3.5 w-3.5" />
+                                        </Button>
+                                    </div>
+
+                                    <div className="flex gap-3">
+                                        <Button variant="outline" className="flex-1" onClick={() => setIsPublishDialogOpen(false)}>
+                                            Done
+                                        </Button>
+                                        <Button
+                                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white gap-2"
+                                            onClick={() => window.open(publishedUrl, "_blank")}
+                                        >
+                                            Visit App <ExternalLink className="h-3 w-3" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

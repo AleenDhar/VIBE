@@ -45,11 +45,19 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     // Fetch memories
     const memories = await getProjectMemories(id);
 
+    // Filter out agent-generated chats:
+    // 1. New ones (prefixed with hidden \u200B)
+    // 2. Legacy ones matching the Salesforce lookup pattern seen in clutter
+    const filteredChats = (chats || []).filter(c =>
+        !c.title?.startsWith("\u200B") &&
+        !c.title?.startsWith("Look up Salesforce Opportu")
+    );
+
     return (
         <ProjectPageClient
             project={project}
             isOwner={isOwner}
-            initialChats={chats || []}
+            initialChats={filteredChats}
             initialDocuments={documents || []}
             initialMemories={memories}
         />

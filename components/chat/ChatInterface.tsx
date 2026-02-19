@@ -14,9 +14,10 @@ interface ChatProps {
     chatId: string;
     initialMessages: any[];
     initialInput?: string;
+    initialModel?: string;
 }
 
-export function ChatInterface({ projectId, chatId, initialMessages, initialInput }: ChatProps) {
+export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel }: ChatProps) {
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
@@ -94,7 +95,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
-    const [model, setModel] = useState("anthropic:claude-opus-4-6");
+    const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
 
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);

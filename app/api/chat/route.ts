@@ -43,33 +43,52 @@ export async function POST(req: NextRequest) {
             chatId = await getDeterministicUUID(chatId);
         }
 
-        console.log(`[API] Processing Chat: ${chatId} (Original: ${rawChatId}), Project: ${projectId}, Model: ${model}`);
+        let finalProjectId = projectId;
+        if (projectId && !isValidUUID(projectId)) {
+            console.log(`[API] Looking up Project UUID for name "${projectId}"...`);
+            const { data: project } = await supabase
+                .from("projects")
+                .select("id")
+                .ilike("name", projectId)
+                .maybeSingle();
+
+            if (project) {
+                console.log(`[API] Found Project UUID: ${project.id}`);
+                finalProjectId = project.id;
+            } else {
+                console.warn(`[API] Project "${projectId}" not found. Proceeding without project context.`);
+                finalProjectId = null;
+            }
+        }
+
+        console.log(`[API] Processing Chat: ${chatId} (Original: ${rawChatId}), Project: ${finalProjectId}, Model: ${model}`);
 
         if (!chatId || !content) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
 
-        // 0. Ensure Chat Exists
-        // If we synthesized a UUID, the chat row might not exist yet.
+        // 0. Ensure Chat Exists & Handle Auto-Naming
         const { data: existingChat } = await supabase
             .from("chats")
-            .select("id")
+            .select("id, title")
             .eq("id", chatId)
-            .single();
+            .maybeSingle();
+
+        const generatedTitle = content.slice(0, 50) + (content.length > 50 ? "..." : "");
 
         if (!existingChat) {
             console.log(`[API] Creating new chat session for ID: ${chatId}`);
-            const { error: createError } = await supabase.from("chats").insert({
+            await supabase.from("chats").insert({
                 id: chatId,
                 user_id: user.id,
-                title: content.slice(0, 50) + (content.length > 50 ? "..." : ""),
-                project_id: projectId || null // Optional: link to project if provided
+                title: generatedTitle,
+                project_id: finalProjectId || null
             });
-
-            if (createError) {
-                console.error("Failed to create chat session:", createError);
-                // If it failed, it might be a race condition (created parallel), try to proceed
-            }
+        } else if (existingChat.title === "New Chat" || !existingChat.title) {
+            console.log(`[API] Auto-naming chat "${chatId}" based on first message`);
+            await supabase.from("chats")
+                .update({ title: generatedTitle })
+                .eq("id", chatId);
         }
 
         // 1. Save User Message
@@ -95,11 +114,11 @@ export async function POST(req: NextRequest) {
         let systemPrompt = basePrompt;
 
         // 3. Get Project System Prompt & Memories (only if chat belongs to a project)
-        if (projectId) {
+        if (finalProjectId) {
             const { data: project } = await supabase
                 .from("projects")
                 .select("system_prompt")
-                .eq("id", projectId)
+                .eq("id", finalProjectId)
                 .single();
             systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
 
@@ -107,7 +126,7 @@ export async function POST(req: NextRequest) {
             const { data: memories } = await supabase
                 .from("project_memories")
                 .select("memory_type, content, sentiment, importance")
-                .eq("project_id", projectId)
+                .eq("project_id", finalProjectId)
                 .order("importance", { ascending: false })
                 .limit(10);
 

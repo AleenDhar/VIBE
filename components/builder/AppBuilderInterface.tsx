@@ -359,9 +359,12 @@ export function AppBuilderInterface() {
                 </div>
 
                 {/* Main Content Area */}
-                <div className="flex-1 relative bg-dots-pattern overflow-auto p-4 md:p-8 flex items-start justify-center">
+                <div className="flex-1 relative overflow-auto p-4 md:p-8 flex items-start justify-center">
+                    {/* Background Pattern Layer */}
+                    <div className="absolute inset-0 bg-dots-pattern pointer-events-none" />
+
                     <div className={cn(
-                        "bg-background border shadow-2xl transition-all duration-300 flex flex-col overflow-hidden relative",
+                        "bg-background border shadow-2xl transition-all duration-300 flex flex-col overflow-hidden relative z-10",
                         previewMode === "desktop" ? "w-full max-w-5xl h-full rounded-xl" : "",
                         previewMode === "tablet" ? "w-[768px] h-[1024px] max-h-full rounded-[2rem] border-[8px] border-muted-foreground/10" : "",
                         previewMode === "mobile" ? "w-[375px] h-[812px] max-h-full rounded-[2.5rem] border-[8px] border-muted-foreground/10" : ""

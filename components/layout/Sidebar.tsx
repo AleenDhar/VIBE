@@ -14,6 +14,7 @@ import {
     Loader2,
     MoreHorizontal,
     LogOut,
+    Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -23,7 +24,8 @@ import { createClient } from "@/lib/supabase/client";
 const menuItems = [
     { name: "Chats", href: "/chat", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
-    { name: "Users", href: "/users", icon: Users },
+    // { name: "App Builder", href: "/builder", icon: Wand2 },
+    // { name: "Users", href: "/users", icon: Users }
     { name: "Admin Panel", href: "/admin", icon: ShieldCheck },
 ];
 
@@ -80,7 +82,15 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                     .order("created_at", { ascending: false })
                     .limit(20);
 
-                if (chats) setRecentChats(chats);
+                if (chats) {
+                    // Filter out agent-generated chats:
+                    // 1. New ones (prefixed with hidden \u200B)
+                    // 2. Legacy ones matching the Salesforce lookup pattern seen in clutter
+                    setRecentChats(chats.filter(c =>
+                        !c.title?.startsWith("\u200B") &&
+                        !c.title?.startsWith("Look up Salesforce Opportu")
+                    ));
+                }
             } catch (error) {
                 console.error("Error fetching sidebar data:", error);
             } finally {
@@ -89,6 +99,22 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
         };
 
         fetchData();
+
+        // Subscribe to changes in chats table
+        const channel = supabase
+            .channel('sidebar_updates')
+            .on('postgres_changes', {
+                event: '*',
+                schema: 'public',
+                table: 'chats'
+            }, () => {
+                fetchData();
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, []);
 
     const handleNewChat = async () => {

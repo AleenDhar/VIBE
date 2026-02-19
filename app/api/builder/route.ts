@@ -38,8 +38,10 @@ CRITICAL RULES:
 
 CAPABILITIES:
 - **File Upload**: Use <input type="file"> with FileReader API and SheetJS for Excel/CSV parsing.
-- **AI Agent Integration**: The app can call \`/api/agent\` with POST { content, projectId, chatId } to access the Replit Agent Server (Salesforce/Avoma/Apollo).
-  - \`/api/agent\` handles project name lookup (e.g., specific project names), chat history, and API keys automatically.
+- **AI Agent Integration**: The app can call \`/api/agent\` with POST { content, projectId, chatId, model }.
+  - **Streaming Mode** (Default): Returns a stream of \`data: { ... }\` chunks. Use a \`TextDecoder\` loop.
+  - **Structured Mode**: If you include \`structured_output_format: { key: "type", ... }\`, the API returns a SINGLE JSON object: \`{ data: { ... }, success: true }\`. Use this for dashboards/reports.
+  - \`/api/agent\` handles project name lookup, chat history, and API keys automatically.
   - Generating UUIDs is preferred but string IDs are supported.
 - **Data Export**: Generate CSV downloads using Blob and URL.createObjectURL.
 
