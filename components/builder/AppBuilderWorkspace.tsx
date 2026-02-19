@@ -76,6 +76,10 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
     const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
     const [isSavingPrompt, setIsSavingPrompt] = useState(false);
 
+    // Continue state
+    const [canContinue, setCanContinue] = useState(false);
+    const [isContinuing, setIsContinuing] = useState(false);
+
     const [previewMode, setPreviewMode] = useState<"desktop" | "tablet" | "mobile">("desktop");
     const [viewMode, setViewMode] = useState<"preview" | "code" | "errors">("preview");
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -113,6 +117,32 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         if (htmlMatch) return htmlMatch[0];
 
         return "";
+    }
+
+    // Apply Search/Replace patches to existing code
+    function applyPatches(baseContent: string, diffText: string): string {
+        const blocks = diffText.split("<<<<<<< SEARCH");
+        let newContent = baseContent;
+
+        // Skip first part if it doesn't contain a search block
+        for (let i = 1; i < blocks.length; i++) {
+            const block = blocks[i];
+            const parts = block.split("=======");
+            if (parts.length < 2) continue;
+
+            const searchPart = parts[0].trim();
+            const replaceParts = parts[1].split(">>>>>>> REPLACE");
+            if (replaceParts.length < 2) continue;
+
+            const replacePart = replaceParts[0].trim();
+
+            if (newContent.includes(searchPart)) {
+                newContent = newContent.replace(searchPart, replacePart);
+            } else {
+                console.warn("[Builder] Could not find search block in content:", searchPart);
+            }
+        }
+        return newContent;
     }
 
     // Load session data from DB on mount
@@ -334,13 +364,33 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                 console.warn("[Builder] Received empty response from AI");
                 throw new Error("Received an empty response from the AI architect.");
             }
-            // Final extraction
-            const finalCode = extractHtmlCode(fullResponse);
-            const hasCode = !!finalCode;
 
+            // Detect if response was cut off (e.g. unclosed code block or search/replace block)
+            const isTruncated = (fullResponse.includes("```") && !fullResponse.endsWith("```")) ||
+                (fullResponse.includes("<<<<<<< SEARCH") && !fullResponse.includes(">>>>>>> REPLACE"));
+            setCanContinue(isTruncated);
+
+            // Process extraction or patching
+            const finalCode = extractHtmlCode(fullResponse);
+            const hasEditBlock = fullResponse.includes("<<<<<<< SEARCH");
+
+            let updatedCode = generatedCode;
             if (finalCode) {
-                setGeneratedCode(finalCode);
-                setViewMode("preview");
+                updatedCode = finalCode;
+            } else if (hasEditBlock) {
+                updatedCode = applyPatches(generatedCode, fullResponse);
+            }
+
+            const hasCode = updatedCode !== generatedCode || !!finalCode;
+
+            if (hasCode) {
+                setGeneratedCode(updatedCode);
+                // Only switch to preview if not already in a view mode that the user chose
+                if (viewMode === "code") {
+                    // Stay in code
+                } else {
+                    setViewMode("preview");
+                }
             }
 
             // Add assistant message to history (FULL CONTENT so AI remembers context)
@@ -421,7 +471,15 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         if (!input.trim() || isBuilding) return;
         const prompt = input;
         setInput("");
+        setCanContinue(false);
         buildApp(prompt, false);
+    };
+
+    const handleContinue = () => {
+        if (isBuilding) return;
+        setCanContinue(false);
+        setIsContinuing(true);
+        buildApp("Continue generating from where you left off. Do not repeat previous text, just pick up exactly where you ended inside the code or edit block. Ensure your response is compatible with the previous message.", false);
     };
 
     const handleCopyCode = useCallback(() => {
@@ -569,7 +627,6 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                     )}
                 </div>
 
-                {/* Input */}
                 <div className="p-4 border-t bg-background/50">
                     <form className="relative" onSubmit={(e) => { e.preventDefault(); handleSend(); }}>
                         <textarea
@@ -594,6 +651,20 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                             <Send className="h-4 w-4" />
                         </Button>
                     </form>
+                    {canContinue && (
+                        <div className="mt-3 flex justify-center animate-in fade-in slide-in-from-top-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-2 text-[11px] font-medium border-indigo-500/30 bg-indigo-500/5 hover:bg-indigo-500/10 text-indigo-400 rounded-full px-4 shadow-sm"
+                                onClick={handleContinue}
+                                disabled={isBuilding}
+                            >
+                                <RefreshCw className={cn("h-3 w-3", isBuilding && "animate-spin")} />
+                                Continue Generating
+                            </Button>
+                        </div>
+                    )}
                 </div>
             </div>
 
