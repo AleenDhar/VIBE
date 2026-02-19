@@ -17,10 +17,12 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: anthropic('claude-opus-4-6'),
-    messages: messages.map(m => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    })),
+    messages: messages
+      .filter(m => m.content && m.content.trim().length > 0)
+      .map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      })),
     system: `You are an expert Application Architect and Developer.
 Your task is to build functional, modern, and beautiful web applications using ONLY vanilla HTML, CSS, and JavaScript.
 

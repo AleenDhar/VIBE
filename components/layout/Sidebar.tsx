@@ -15,6 +15,7 @@ import {
     MoreHorizontal,
     LogOut,
     Wand2,
+    Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -22,7 +23,7 @@ import { ModeToggle } from "@/components/ModeToggle";
 import { createClient } from "@/lib/supabase/client";
 
 const menuItems = [
-    { name: "Chats", href: "/chat", icon: MessageSquare },
+    { name: "Chats", href: "/chats", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
     // { name: "App Builder", href: "/builder", icon: Wand2 },
     // { name: "Users", href: "/users", icon: Users }
@@ -56,6 +57,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
     const [loading, setLoading] = useState(true);
     const [creatingChat, setCreatingChat] = useState(false);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+    const [searchQuery, setSearchQuery] = useState("");
 
     useEffect(() => {
         const fetchData = async () => {
@@ -117,20 +119,9 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
         };
     }, []);
 
-    const handleNewChat = async () => {
-        setCreatingChat(true);
-        try {
-            const { createStandaloneChat } = await import("@/lib/actions/chat");
-            const result = await createStandaloneChat();
-            if (result.id) {
-                router.push(`/chat/${result.id}`);
-                setMobileOpen?.(false);
-            }
-        } catch (err) {
-            console.error("Error creating chat:", err);
-        } finally {
-            setCreatingChat(false);
-        }
+    const handleNewChat = () => {
+        router.push("/chat");
+        setMobileOpen?.(false);
     };
 
     const handleLogout = async () => {
@@ -238,45 +229,69 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                     <div className="flex-1 overflow-y-auto sidebar-scroll min-h-0">
                         {!isCollapsed && (
                             <div>
-                                <h4 className="px-3 text-[11px] font-medium text-muted-foreground/50 uppercase tracking-wider mb-2">
-                                    Recents
-                                </h4>
+                                <div className="flex items-center justify-between mb-2">
+                                    <h4 className="px-3 text-[11px] font-medium text-muted-foreground/50 uppercase tracking-wider">
+                                        Recents
+                                    </h4>
+                                </div>
+
+                                {/* Search Bar */}
+                                <div className="px-2 mb-3">
+                                    <div className="relative group">
+                                        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none">
+                                            <Search className="h-3.5 w-3.5 text-muted-foreground/40 group-focus-within:text-muted-foreground/70 transition-colors" />
+                                        </div>
+                                        <input
+                                            type="text"
+                                            placeholder="Search recent..."
+                                            value={searchQuery}
+                                            onChange={(e) => setSearchQuery(e.target.value)}
+                                            className="w-full bg-accent/10 border border-border/20 rounded-md py-1.5 pl-9 pr-3 text-[12px] focus:outline-none focus:ring-1 focus:ring-border/40 placeholder:text-muted-foreground/30 transition-all hover:bg-accent/20"
+                                        />
+                                    </div>
+                                </div>
+
                                 {loading ? (
                                     <div className="flex items-center justify-center py-4">
                                         <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/40" />
                                     </div>
-                                ) : recentChats.length === 0 ? (
-                                    <p className="px-3 text-xs text-muted-foreground/40">No recent chats</p>
                                 ) : (
                                     <div className="space-y-px">
-                                        {recentChats.map((chat) => {
-                                            const href = getChatHref(chat);
-                                            const isActive = pathname === href;
-                                            return (
-                                                <Link
-                                                    key={chat.id}
-                                                    href={href}
-                                                    className={cn(
-                                                        "group flex items-center justify-between rounded-md px-3 py-1.5 text-[13px] transition-colors",
-                                                        isActive
-                                                            ? "bg-accent/40 text-foreground"
-                                                            : "text-muted-foreground/80 hover:text-foreground hover:bg-accent/20"
-                                                    )}
-                                                    onClick={() => setMobileOpen?.(false)}
-                                                >
-                                                    <span className="truncate pr-2">{chat.title || "New Chat"}</span>
-                                                    <button
-                                                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-foreground p-0.5 rounded flex-shrink-0"
-                                                        onClick={(e) => {
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                        }}
+                                        {recentChats
+                                            .filter(c => (c.title || "New Chat").toLowerCase().includes(searchQuery.toLowerCase()))
+                                            .map((chat) => {
+                                                const href = getChatHref(chat);
+                                                const isActive = pathname === href;
+                                                return (
+                                                    <Link
+                                                        key={chat.id}
+                                                        href={href}
+                                                        className={cn(
+                                                            "group flex items-center justify-between rounded-md px-3 py-1.5 text-[13px] transition-colors",
+                                                            isActive
+                                                                ? "bg-accent/40 text-foreground"
+                                                                : "text-muted-foreground/80 hover:text-foreground hover:bg-accent/20"
+                                                        )}
+                                                        onClick={() => setMobileOpen?.(false)}
                                                     >
-                                                        <MoreHorizontal className="h-3.5 w-3.5" />
-                                                    </button>
-                                                </Link>
-                                            );
-                                        })}
+                                                        <span className="truncate pr-2">{chat.title || "New Chat"}</span>
+                                                        <button
+                                                            className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground/50 hover:text-foreground p-0.5 rounded flex-shrink-0"
+                                                            onClick={(e) => {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                            }}
+                                                        >
+                                                            <MoreHorizontal className="h-3.5 w-3.5" />
+                                                        </button>
+                                                    </Link>
+                                                );
+                                            })}
+                                        {recentChats.filter(c => (c.title || "New Chat").toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+                                            <p className="px-3 text-xs text-muted-foreground/40 italic py-2">
+                                                {searchQuery ? "No matches found" : "No recent chats"}
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>

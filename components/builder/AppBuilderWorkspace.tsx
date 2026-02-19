@@ -246,8 +246,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
                 });
 
                 // Update session title from first user message
-                const currentMessages = messages;
-                if (currentMessages.filter(m => m.role === "user").length === 0) {
+                if (messages.filter(m => m.role === "user").length === 0) {
                     const title = userPrompt.slice(0, 60) + (userPrompt.length > 60 ? "..." : "");
                     setSessionTitle(title);
                     await supabase.from("builder_sessions")
@@ -261,10 +260,12 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             if (!skipUserMessage) {
                 currentMessages.push({ id: "temp", role: "user", content: userPrompt });
             }
-            const apiMessages = currentMessages.map(m => ({
-                role: m.role,
-                content: m.content,
-            }));
+            const apiMessages = currentMessages
+                .filter(m => m.content && m.content.trim().length > 0)
+                .map(m => ({
+                    role: m.role,
+                    content: m.content,
+                }));
 
             const response = await fetch("/api/builder", {
                 method: "POST",
@@ -305,7 +306,6 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             }
             // Final extraction
             const finalCode = extractHtmlCode(fullResponse);
-            // const chatText = stripCodeBlocks(fullResponse); // No longer needed for state
             const hasCode = !!finalCode;
 
             if (finalCode) {
@@ -314,43 +314,44 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             }
 
             // Add assistant message to history (FULL CONTENT so AI remembers context)
-            setMessages(prev => [...prev, {
-                id: crypto.randomUUID(),
-                role: "assistant",
-                content: fullResponse,
-                hasCode,
-            }]);
-            scrollToBottom();
-
-            // Save to DB (fire-and-forget, don't let DB errors block the UI)
-            try {
-                const { data: savedMsg } = await supabase.from("builder_messages").insert({
-                    session_id: sessionId,
+            if (fullResponse.trim()) {
+                setMessages(prev => [...prev, {
+                    id: crypto.randomUUID(),
                     role: "assistant",
                     content: fullResponse,
-                }).select("id").single();
+                    hasCode,
+                }]);
+                scrollToBottom();
 
-                if (finalCode) {
-                    const { count } = await supabase
-                        .from("builder_artifacts")
-                        .select("*", { count: "exact", head: true })
-                        .eq("session_id", sessionId);
-
-                    await supabase.from("builder_artifacts").insert({
+                // Save to DB (fire-and-forget, don't let DB errors block the UI)
+                try {
+                    const { data: savedMsg } = await supabase.from("builder_messages").insert({
                         session_id: sessionId,
-                        message_id: savedMsg?.id,
-                        code: finalCode,
-                        version: (count || 0) + 1,
-                    });
+                        role: "assistant",
+                        content: fullResponse,
+                    }).select("id").single();
+
+                    if (finalCode) {
+                        const { count } = await supabase
+                            .from("builder_artifacts")
+                            .select("*", { count: "exact", head: true })
+                            .eq("session_id", sessionId);
+
+                        await supabase.from("builder_artifacts").insert({
+                            session_id: sessionId,
+                            message_id: savedMsg?.id,
+                            code: finalCode,
+                            version: (count || 0) + 1,
+                        });
+                    }
+
+                    await supabase.from("builder_sessions")
+                        .update({ updated_at: new Date().toISOString() })
+                        .eq("id", sessionId);
+                } catch (dbErr) {
+                    console.error("DB error saving assistant message:", dbErr);
                 }
-
-                await supabase.from("builder_sessions")
-                    .update({ updated_at: new Date().toISOString() })
-                    .eq("id", sessionId);
-            } catch (dbErr) {
-                console.error("DB save error (non-blocking):", dbErr);
             }
-
         } catch (err) {
             console.error("Build error:", err);
             setMessages(prev => [...prev, {
