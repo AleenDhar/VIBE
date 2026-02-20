@@ -184,3 +184,25 @@ export async function sendMessage(projectId: string | null, chatId: string, cont
         return { error: err.message };
     }
 }
+
+export async function toggleStarChat(chatId: string, isStarred: boolean) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+        return { error: "Unauthorized" };
+    }
+
+    const { error } = await supabase
+        .from("chats")
+        .update({ is_starred: isStarred })
+        .eq("id", chatId)
+        .eq("user_id", user.id);
+
+    if (error) {
+        console.error("Toggle Star Chat Error:", error);
+        return { error: error.message };
+    }
+
+    return { success: true };
+}
