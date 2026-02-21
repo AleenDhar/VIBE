@@ -17,6 +17,8 @@ import {
     Wand2,
     Search,
     Eye,
+    Star,
+    Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -66,6 +68,24 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [userRole, setUserRole] = useState<string | null>(null);
+    const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    // Handle click outside dropdown to close it
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setOpenDropdownId(null);
+            }
+        };
+
+        if (openDropdownId) {
+            document.addEventListener("mousedown", handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [openDropdownId]);
 
     useEffect(() => {
         const fetchData = async () => {
