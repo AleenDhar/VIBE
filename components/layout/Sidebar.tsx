@@ -16,6 +16,7 @@ import {
     LogOut,
     Wand2,
     Search,
+    Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -28,6 +29,10 @@ const menuItems = [
     // { name: "App Builder", href: "/builder", icon: Wand2 },
     // { name: "Users", href: "/users", icon: Users }
     { name: "Admin Panel", href: "/admin", icon: ShieldCheck },
+];
+
+const superAdminItems = [
+    { name: "Omnivision", href: "/omnivision", icon: Eye },
 ];
 
 interface SidebarProps {
@@ -58,6 +63,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
     const [creatingChat, setCreatingChat] = useState(false);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
+    const [userRole, setUserRole] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -67,7 +73,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
 
                 const { data: profile } = await supabase
                     .from("profiles")
-                    .select("full_name, avatar_url")
+                    .select("full_name, avatar_url, role")
                     .eq("id", user.id)
                     .single();
 
@@ -76,6 +82,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                     avatar_url: profile?.avatar_url || null,
                     email: user.email || "",
                 });
+                setUserRole(profile?.role || null);
 
                 const { data: chats } = await supabase
                     .from("chats")
@@ -214,6 +221,28 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                         isActive
                                             ? "text-foreground font-medium"
                                             : "text-muted-foreground hover:text-foreground"
+                                    )}
+                                    title={isCollapsed ? item.name : undefined}
+                                    onClick={() => setMobileOpen?.(false)}
+                                >
+                                    <item.icon className="h-[18px] w-[18px] flex-shrink-0" />
+                                    <span className={cn(isCollapsed && "md:hidden")}>{item.name}</span>
+                                </Link>
+                            );
+                        })}
+                        {/* Super Admin - Omnivision */}
+                        {userRole === 'super_admin' && superAdminItems.map((item) => {
+                            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+                            return (
+                                <Link
+                                    key={item.href}
+                                    href={item.href}
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                                        isCollapsed ? "md:justify-center md:px-2 md:w-10" : "",
+                                        isActive
+                                            ? "text-amber-600 dark:text-amber-400 font-medium bg-amber-500/10"
+                                            : "text-amber-600/60 dark:text-amber-400/60 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-500/5"
                                     )}
                                     title={isCollapsed ? item.name : undefined}
                                     onClick={() => setMobileOpen?.(false)}

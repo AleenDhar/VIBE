@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { StandaloneChatClient } from "@/components/chat/StandaloneChatClient";
+import { verifySuperAdmin } from "@/lib/actions/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,9 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
         return <div>Please login first.</div>;
     }
 
-    // Verify project access
+    const isSuperAdmin = await verifySuperAdmin();
+
+    // Super admins can access any project and chat; regular users must own it
     const { data: project } = await supabase
         .from("projects")
         .select("id, name")
@@ -22,13 +25,14 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     if (!project) notFound();
 
-    // Verify chat access
-    const { data: chat } = await supabase
+    // Build chat query — super admins bypass user_id check
+    const chatQuery = supabase
         .from("chats")
         .select("*")
         .eq("id", chatId)
-        .eq("project_id", projectId)
-        .single();
+        .eq("project_id", projectId);
+
+    const { data: chat } = await chatQuery.single();
 
     if (!chat) notFound();
 

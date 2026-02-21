@@ -9,7 +9,7 @@ export function DashboardClientLayout({ children }: { children: React.ReactNode 
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [isMobileOpen, setIsMobileOpen] = useState(false);
     const pathname = usePathname();
-    const isFullScreenPage = pathname?.includes("/chat/") || pathname?.includes("/builder");
+    const isFullScreenPage = pathname?.includes("/chat/") || pathname?.includes("/builder") || pathname?.includes("/omnivision");
 
     return (
         <div className="flex h-screen w-full max-w-[100vw] overflow-hidden bg-background">
