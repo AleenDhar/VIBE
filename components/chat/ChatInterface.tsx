@@ -1,13 +1,15 @@
 "use client";
 
 import { createElement, useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChartRenderer } from "@/components/chat/ChartRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { createNewChat } from "@/lib/actions/chat";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -209,12 +211,32 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
+    const [creatingNewChat, setCreatingNewChat] = useState(false);
+    const router = useRouter();
 
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
     const supabase = createClient();
+
+    // Handle creating a new chat in the same project
+    const handleNewChat = async () => {
+        if (!projectId || creatingNewChat) return;
+        setCreatingNewChat(true);
+        try {
+            const result = await createNewChat(projectId);
+            if (result.id) {
+                router.push(`/projects/${projectId}/chat/${result.id}`);
+            } else if (result.error) {
+                console.error("Failed to create chat:", result.error);
+            }
+        } catch (e) {
+            console.error("Error creating new chat:", e);
+        } finally {
+            setCreatingNewChat(false);
+        }
+    };
 
     // Scroll to bottom on messages change
     useEffect(() => {
@@ -851,8 +873,29 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     return (
         <div className="flex flex-col h-full bg-background relative w-full max-w-screen overflow-x-hidden">
 
-
-
+            {/* New Chat Header Button — only show inside project chats */}
+            {projectId && (
+                <div className="flex items-center justify-end px-3 md:px-5 pt-3 pb-1">
+                    <button
+                        onClick={handleNewChat}
+                        disabled={creatingNewChat}
+                        className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium
+                            bg-primary/10 text-primary border border-primary/20
+                            hover:bg-primary hover:text-primary-foreground hover:border-primary
+                            hover:shadow-[0_0_16px_rgba(var(--primary-rgb,99,102,241),0.25)]
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            transition-all duration-200 ease-out"
+                        title="Start a new chat in this project"
+                    >
+                        {creatingNewChat ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <Plus className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-90" />
+                        )}
+                        <span>{creatingNewChat ? "Creating..." : "New Chat"}</span>
+                    </button>
+                </div>
+            )}
 
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" ref={scrollRef}>
                 {messages.length === 0 && (
