@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
-export async function addDocument(projectId: string, name: string, filePath: string) {
+export async function addDocument(projectId: string, name: string, filePath: string, content?: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -16,7 +16,8 @@ export async function addDocument(projectId: string, name: string, filePath: str
         .insert({
             project_id: projectId,
             name: name,
-            file_path: filePath
+            file_path: filePath,
+            content: content || null
         });
 
     if (error) {
@@ -25,6 +26,38 @@ export async function addDocument(projectId: string, name: string, filePath: str
     }
 
     revalidatePath(`/projects/${projectId}`);
+    return { success: true };
+}
+
+export async function updateDocumentContent(documentId: string, content: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+        return { error: "Unauthorized" };
+    }
+
+    const { data: doc } = await supabase
+        .from("documents")
+        .select("project_id")
+        .eq("id", documentId)
+        .single();
+
+    if (!doc) {
+        return { error: "Document not found" };
+    }
+
+    const { error } = await supabase
+        .from("documents")
+        .update({ content })
+        .eq("id", documentId);
+
+    if (error) {
+        console.error("Update Document Content Error:", error);
+        return { error: error.message };
+    }
+
+    revalidatePath(`/projects/${doc.project_id}`);
     return { success: true };
 }
 

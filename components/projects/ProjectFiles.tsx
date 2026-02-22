@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Loader2, Trash2, Plus } from "lucide-react";
+import { Loader2, Trash2, Plus, CheckCircle2, FileText, RefreshCw } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { extractFileContent } from "@/lib/extract-file-content";
 
 interface ProjectFilesProps {
     projectId: string;
@@ -19,25 +20,44 @@ function getFileExtension(filename: string): string {
 export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
     const [files, setFiles] = useState(initialFiles);
     const [uploading, setUploading] = useState(false);
+    const [uploadStatus, setUploadStatus] = useState("");
+    const [indexingId, setIndexingId] = useState<string | null>(null);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
 
         const file = e.target.files[0];
         setUploading(true);
+        setUploadStatus("Uploading file...");
 
         const supabase = createClient();
         const filePath = `projects/${projectId}/${Date.now()}_${file.name}`;
 
         try {
+            // 1. Upload file to Supabase Storage
             const { error: uploadError } = await supabase.storage
                 .from("project-files")
                 .upload(filePath, file);
 
             if (uploadError) throw uploadError;
 
+            // 2. Extract text content from the file (client-side)
+            setUploadStatus("Extracting content...");
+            let extractedContent = "";
+            try {
+                extractedContent = await extractFileContent(file);
+                if (extractedContent) {
+                    console.log(`Extracted ${extractedContent.length} chars from ${file.name}`);
+                }
+            } catch (extractError) {
+                console.warn("Content extraction failed (non-fatal):", extractError);
+                // Non-fatal — file still uploads, just without extracted content
+            }
+
+            // 3. Save metadata + extracted content to documents table
+            setUploadStatus("Saving...");
             const { addDocument } = await import("@/lib/actions/documents");
-            const result = await addDocument(projectId, file.name, filePath);
+            const result = await addDocument(projectId, file.name, filePath, extractedContent || undefined);
 
             if (result.success) {
                 window.location.reload();
@@ -49,6 +69,7 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
             alert("Upload failed: " + error.message);
         } finally {
             setUploading(false);
+            setUploadStatus("");
         }
     };
 
@@ -74,6 +95,45 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
         }
     };
 
+    const handleReindex = async (doc: any) => {
+        setIndexingId(doc.id);
+        const supabase = createClient();
+
+        try {
+            // Download file from Supabase Storage
+            const { data: fileData, error: downloadError } = await supabase.storage
+                .from("project-files")
+                .download(doc.file_path);
+
+            if (downloadError || !fileData) throw downloadError || new Error("Download failed");
+
+            // Create a File object from the blob
+            const file = new File([fileData], doc.name, { type: fileData.type });
+
+            // Extract content
+            const content = await extractFileContent(file);
+            if (!content) {
+                alert("Could not extract content from this file type.");
+                return;
+            }
+
+            // Update document in DB
+            const { updateDocumentContent } = await import("@/lib/actions/documents");
+            const result = await updateDocumentContent(doc.id, content);
+
+            if (result.success) {
+                window.location.reload();
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error: any) {
+            console.error("Re-index failed:", error);
+            alert("Re-index failed: " + error.message);
+        } finally {
+            setIndexingId(null);
+        }
+    };
+
     return (
         <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -84,7 +144,7 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                         className="hidden"
                         onChange={handleUpload}
                         disabled={uploading}
-                        accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,image/*"
+                        accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.md"
                     />
                     <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
                         {uploading ? (
@@ -96,10 +156,19 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                 </label>
             </div>
 
+            {/* Upload status indicator */}
+            {uploading && uploadStatus && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/5 border border-primary/10">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                    <span className="text-xs text-primary">{uploadStatus}</span>
+                </div>
+            )}
+
             {files && files.length > 0 ? (
                 <div className="grid grid-cols-2 gap-3">
                     {files.map((doc: any) => {
                         const ext = getFileExtension(doc.name);
+                        const hasContent = !!doc.content;
                         return (
                             <div
                                 key={doc.id}
@@ -118,10 +187,30 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                                     {doc.name}
                                 </p>
 
-                                <div className="mt-3">
+                                <div className="mt-3 flex items-center gap-2">
                                     <span className="inline-block text-[11px] font-medium text-muted-foreground bg-muted/80 px-2 py-0.5 rounded">
                                         {ext}
                                     </span>
+                                    {hasContent ? (
+                                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-500" title="Content extracted — available as chat context">
+                                            <CheckCircle2 className="h-3 w-3" />
+                                            <span>Indexed</span>
+                                        </span>
+                                    ) : (
+                                        <button
+                                            onClick={() => handleReindex(doc)}
+                                            disabled={indexingId === doc.id}
+                                            className="inline-flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 transition-colors cursor-pointer"
+                                            title="Extract content so AI can read this file"
+                                        >
+                                            {indexingId === doc.id ? (
+                                                <Loader2 className="h-3 w-3 animate-spin" />
+                                            ) : (
+                                                <RefreshCw className="h-3 w-3" />
+                                            )}
+                                            <span>{indexingId === doc.id ? "Indexing..." : "Index"}</span>
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         );
