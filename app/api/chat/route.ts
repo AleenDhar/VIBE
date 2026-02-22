@@ -136,6 +136,25 @@ export async function POST(req: NextRequest) {
                 ).join("\n");
                 systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
             }
+            // 4b. Get Project Documents
+            const { data: documents } = await supabase
+                .from("documents")
+                .select("name, content, file_path")
+                .eq("project_id", finalProjectId);
+
+            if (documents && documents.length > 0) {
+                const docsContext = documents
+                    .filter(d => d.content) // Only include docs with extracted content
+                    .map(d => `--- File: ${d.name} ---\n${d.content}\n--- End of File: ${d.name} ---`)
+                    .join("\n\n");
+
+                if (docsContext) {
+                    systemPrompt += `\n\n## Attached Project Files\nThe following files have been attached to this project. You have full access to their contents. Always refer to these contents if the user asks about them:\n\n${docsContext}`;
+                } else {
+                    const docNames = documents.map(d => d.name).join(", ");
+                    systemPrompt += `\n\n## Attached Project Files\nThe following files are attached to this project but their text content could not be extracted: ${docNames}.`;
+                }
+            }
         }
 
         // 5. Get API Keys & Agent URL

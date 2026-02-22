@@ -10,6 +10,8 @@ import remarkGfm from "remark-gfm";
 import { ChartRenderer } from "@/components/chat/ChartRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
+import { extractFileContent } from "@/lib/extract-file-content";
+import { addDocument } from "@/lib/actions/documents";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -773,17 +775,31 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
 
         try {
-            const { error } = await supabase.storage
+            // 1. Upload to Storage
+            const { error: uploadError } = await supabase.storage
                 .from("project-files")
                 .upload(filePath, file);
 
-            if (error) throw error;
+            if (uploadError) throw uploadError;
+
+            // 2. Extract content (client-side)
+            let extractedContent = "";
+            try {
+                extractedContent = await extractFileContent(file);
+            } catch (extractError) {
+                console.warn("Content extraction failed for chat upload:", extractError);
+            }
+
+            // 3. If in a project, save to documents table so it's injected into system prompt
+            if (projectId) {
+                await addDocument(projectId, file.name, filePath, extractedContent || undefined);
+            }
 
             const { data: { publicUrl } } = supabase.storage
                 .from("project-files")
                 .getPublicUrl(filePath);
 
-            const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})`;
+            const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})${extractedContent ? "\n\n*File content has been indexed and added to chat context.*" : ""}`;
             await handleSend(fileMessage);
 
         } catch (error: any) {
