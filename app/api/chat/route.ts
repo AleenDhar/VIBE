@@ -157,6 +157,19 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // Get Agent Behavioral Instructions (Global for the user)
+        const { data: instructions } = await supabase
+            .from("agent_instructions")
+            .select("instruction")
+            .eq("user_id", user.id)
+            .eq("is_active", true)
+            .order("created_at", { ascending: false });
+
+        if (instructions && instructions.length > 0) {
+            const instructionsContext = instructions.map(i => `- ${i.instruction}`).join("\n");
+            systemPrompt += `\n\n## Behavioral Instructions\nThe following are specific instructions and behavioral rules you MUST follow in this conversation, based on previous interactions:\n${instructionsContext}`;
+        }
+
         // 5. Get API Keys & Agent URL
         const { data: configData } = await supabase
             .from("app_config")

@@ -105,6 +105,21 @@ export async function sendMessage(projectId: string | null, chatId: string, cont
         }
     }
 
+    // Get Agent Behavioral Instructions
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+        const { data: instructions } = await supabase
+            .from("agent_instructions")
+            .select("instruction")
+            .eq("user_id", user.id)
+            .eq("is_active", true)
+            .order("created_at", { ascending: false });
+
+        if (instructions && instructions.length > 0) {
+            systemPrompt += `\n\n## Behavioral Instructions\nThe following are specific instructions and behavioral rules you MUST follow in this conversation, based on previous interactions:\n${instructions.map(i => `- ${i.instruction}`).join('\n')}`;
+        }
+    }
+
     // Construct Payload
     const messagesPayload = previousMessages.map(m => ({
         role: m.role,

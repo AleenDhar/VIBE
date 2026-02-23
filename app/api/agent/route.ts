@@ -136,6 +136,18 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        // Add Global Agent Instructions for the user
+        const { data: instructions } = await supabase
+            .from("agent_instructions")
+            .select("instruction")
+            .eq("user_id", user.id)
+            .eq("is_active", true)
+            .order("created_at", { ascending: false });
+
+        if (instructions && instructions.length > 0) {
+            systemPrompt += `\n\n## Behavioral Instructions:\n${instructions.map(i => `- ${i.instruction}`).join('\n')}`;
+        }
+
         // 7. Route & Payload Construction
         const baseUrl = config.agent_api_url || "https://agent-salesforce-link.replit.app/api/chat/";
         // If structured_output_format is present, use the structured endpoint
