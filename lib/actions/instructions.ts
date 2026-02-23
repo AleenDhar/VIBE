@@ -11,58 +11,98 @@ export async function extractBehavioralInstructions(chatId: string) {
         return { success: false, error: "Unauthorized" };
     }
 
+    console.log(`[Instructions] Extracting from chat: ${chatId}`);
+
     // Get chat messages
-    const { data: messages } = await supabase
+    const { data: messages, error: messagesError } = await supabase
         .from("chat_messages")
         .select("role, content")
         .eq("chat_id", chatId)
         .order("created_at", { ascending: true });
 
+    if (messagesError) {
+        console.error("[Instructions] Error fetching messages:", messagesError);
+        return { success: false, error: messagesError.message };
+    }
+
     if (!messages || messages.length === 0) {
+        console.warn("[Instructions] No messages found for chat", chatId);
         return { success: false, error: "No messages found" };
     }
 
+    console.log(`[Instructions] Found ${messages.length} total raw messages`);
+
+    // Filter out noisy status/processing messages to give the AI a cleaner conversation
+    const filteredMessages = (messages as any[]).filter(m => {
+        // Skip purely status messages or short processing updates that don't contain real info
+        if (m.content === "processing" || m.content === "Thinking...") return false;
+        if (m.type === "status") return false;
+        return true;
+    });
+
+    console.log(`[Instructions] Filtered down to ${filteredMessages.length} meaningful messages`);
+
     // Construct conversation for analysis
-    const conversation = (messages as any[]).map(m => `${m.role}: ${m.content}`).join("\n\n");
+    const conversation = filteredMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
 
     // Call AI to extract instructions
-    const analysisPrompt = `Analyze this conversation between a user and an AI assistant.
-Focus on areas where the assistant's response was not good, misunderstood the user, or required correction by the user.
-If you find such instances, create short, clear behavioral instructions for the assistant to follow in the future to avoid these mistakes.
-For example, "Always respond with code snippets when asked for examples" or "Never use overly formal language".
+    const analysisPrompt = `Analyze the following conversation history.
+Your task is to identify specific behavioral rules, preferences, or corrections that the AI should remember for future interactions with this user.
 
-Only extract instructions if the assistant made a mistake or the user implicitly/explicitly corrected the assistant.
+BE THOROUGH. Look for:
+- Direct corrections (e.g., "Don't do X", "Use Y instead").
+- Subtle preferences (e.g., User seems to prefer technical details, or wants faster summaries).
+- AI Failure points: Did the AI use a tool incorrectly? Did it miss a requirement?
+- Tone adjustments: Should the AI be more formal, more concise, or more proactive?
 
-Conversation:
+INSTRUCTIONS FORMAT:
+- Each instruction must be a standalone "Rule of Thumb".
+- Format: "Always [do X]" or "Never [do Y]" or "When [scenario], ensure [Z]".
+
+Conversation History:
+---
 ${conversation}
+---
 
-Return a JSON array of instructions (each instruction as a string).`;
+If you find even minor behavioral patterns or opportunities for improvement, extract them.
+Return a JSON object with an "instructions" array. If absolutely nothing is found, return an empty array.`;
 
     try {
+        console.log("[Instructions] Sending cleaned conversation to AI analyzer...");
+        const payload = {
+            messages: [{ role: "user", content: analysisPrompt }],
+            system_prompt: "You are an expert Behavior Analyst for AI agents. You excel at spotting user preferences and AI behavioral mistakes even when they aren't explicitly stated as 'rules'.",
+            model: "openai:gpt-4o",
+            structured_output_format: {
+                type: "object",
+                properties: {
+                    instructions: {
+                        type: "array",
+                        items: { type: "string" }
+                    }
+                },
+                required: ["instructions"]
+            }
+        };
+
         const response = await fetch("http://13.201.66.23:8000/api/chat/structured", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                messages: [{ role: "user", content: analysisPrompt }],
-                system_prompt: "You are an AI behavior reviewer. Extract behavioral rules based on AI mistakes in the conversation.",
-                model: "openai:gpt-4o", // using gpt-4o or gpt-4 for better reasoning
-                structured_output_format: {
-                    type: "object",
-                    properties: {
-                        instructions: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            }
-                        }
-                    },
-                    required: ["instructions"]
-                }
-            })
+            body: JSON.stringify(payload)
         });
 
-        const data = await response.json();
-        const instructions: string[] = data.instructions || [];
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("[Instructions] AI API failed:", response.status, errorText);
+            return { success: false, error: `AI API Error: ${response.status}` };
+        }
+
+        const responseData = await response.json();
+        console.log("[Instructions] AI Decision Data:", JSON.stringify(responseData, null, 2));
+
+        // The API returns the structured output inside a 'data' field
+        const instructions: string[] = responseData.data?.instructions || responseData.instructions || [];
+        console.log(`[Instructions] Extracted ${instructions.length} instructions:`, instructions);
 
         if (instructions.length === 0) {
             return { success: true, count: 0 };
