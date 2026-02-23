@@ -3,8 +3,7 @@
 import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X } from "lucide-react";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Brain } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
