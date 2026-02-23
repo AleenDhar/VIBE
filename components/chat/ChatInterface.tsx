@@ -4,6 +4,7 @@ import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Brain } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +14,94 @@ import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
 import { addDocument } from "@/lib/actions/documents";
 import { exportToPDF, exportToDocx } from "@/lib/export-utils";
+import { extractBehavioralInstructions } from "@/lib/actions/instructions";
+
+// Shared markdown renderer used for both final content and thinking step content
+function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
+    return (
+        <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+                code: ({ node, ...props }: any) => {
+                    const match = /language-(\w+)/.exec((props.className || ''))
+                    if (match && match[1] === 'chart') {
+                        return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
+                    }
+                    return !match ? (
+                        <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
+                    ) : (
+                        <code className="block font-mono text-xs md:text-sm" {...props} />
+                    )
+                },
+                pre: ({ node, ...props }: any) => (
+                    <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
+                ),
+                img: ({ node, ...props }: any) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
+                ),
+                p: ({ node, ...props }: any) => (
+                    <p className={`${compact ? 'mb-1.5' : 'mb-3'} last:mb-0 leading-7`} {...props} />
+                ),
+                a: ({ node, ...props }: any) => (
+                    <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
+                ),
+                ul: ({ node, ...props }: any) => (
+                    <ul className={`list-disc pl-6 ${compact ? 'mb-1.5' : 'mb-3'} space-y-1.5 marker:text-muted-foreground`} {...props} />
+                ),
+                ol: ({ node, ...props }: any) => (
+                    <ol className={`list-decimal pl-6 ${compact ? 'mb-1.5' : 'mb-3'} space-y-1.5 marker:text-muted-foreground`} {...props} />
+                ),
+                li: ({ node, ...props }: any) => (
+                    <li className="pl-1" {...props} />
+                ),
+                blockquote: ({ node, ...props }: any) => (
+                    <blockquote className="border-l-4 border-primary/30 pl-4 py-1 italic text-muted-foreground my-3 bg-primary/5 rounded-r-md" {...props} />
+                ),
+                table: ({ node, ...props }: any) => (
+                    <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
+                        <table className="w-full text-sm text-left border-collapse" {...props} />
+                    </div>
+                ),
+                thead: ({ node, ...props }: any) => (
+                    <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
+                ),
+                tbody: ({ node, ...props }: any) => (
+                    <tbody className="divide-y divide-border/50" {...props} />
+                ),
+                tr: ({ node, ...props }: any) => (
+                    <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
+                ),
+                th: ({ node, ...props }: any) => (
+                    <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
+                ),
+                hr: ({ node, ...props }: any) => (
+                    <hr className="my-6 border-border/50" {...props} />
+                ),
+                td: ({ node, ...props }: any) => (
+                    <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
+                ),
+                h1: ({ node, ...props }: any) => (
+                    <h1 className="text-xl font-bold mt-5 mb-3 text-foreground" {...props} />
+                ),
+                h2: ({ node, ...props }: any) => (
+                    <h2 className="text-lg font-semibold mt-4 mb-2 text-foreground border-b border-border/40 pb-1" {...props} />
+                ),
+                h3: ({ node, ...props }: any) => (
+                    <h3 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />
+                ),
+                h4: ({ node, ...props }: any) => (
+                    <h4 className="text-sm font-semibold mt-2 mb-1 text-foreground" {...props} />
+                ),
+                strong: ({ node, ...props }: any) => (
+                    <strong className="font-semibold text-foreground" {...props} />
+                ),
+            }}
+        >
+            {content}
+        </ReactMarkdown>
+    );
+}
 
 interface ChatProps {
     projectId: string | null;
@@ -26,48 +115,69 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
+        const meta = typeof msg.metadata === 'string'
+            ? (() => { try { return JSON.parse(msg.metadata) || {}; } catch { return {}; } })()
+            : (msg.metadata || {});
+
+        // ── DEDUPLICATION ────────────────────────────────────────────────
+        // The backend writes each tool_call / tool_result twice:
+        //   1) Without "source" field (the numbered step record)
+        //   2) With source = "tool_wrapper" (the canonical record with full metadata)
+        // We keep only the tool_wrapper version for tools. For thinking messages
+        // that have no source field we still keep them.
+        if ((type === 'tool_call' || type === 'tool_result') && msg.role === 'assistant') {
+            // If this is the numbered-step duplicate (has a "step" key but no "source"),
+            // skip it — the tool_wrapper record will carry the same info plus more.
+            if (meta.step !== undefined && meta.source !== 'tool_wrapper') {
+                return acc;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────
 
         if (msg.role === 'user') {
-            // Always add user messages
             acc.push({ ...msg });
         } else if (msg.role === 'assistant') {
             const lastMsg = acc[acc.length - 1];
 
-            // If this is a thinking/tool message, attach it to the last assistant message
             if (type === 'thinking' || type === 'tool_call' || type === 'tool_result') {
                 if (lastMsg && lastMsg.role === 'assistant') {
-                    // Add to existing assistant message's thinking steps
-                    // Add to existing assistant message's thinking steps
                     if (type === 'thinking') {
-                        // Safely parse metadata
-                        const meta = typeof msg.metadata === 'string' ? (JSON.parse(msg.metadata) || {}) : (msg.metadata || {});
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), { type: 'thinking', content: msg.content, metadata: meta }];
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), {
+                            type: 'thinking',
+                            content: msg.content,
+                            metadata: meta
+                        }];
                     } else if (type === 'tool_call') {
-                        // Safely parse metadata
-                        const meta = typeof msg.metadata === 'string' ? (JSON.parse(msg.metadata) || {}) : (msg.metadata || {});
+                        // Args come from metadata.args, tool name from metadata.tool
+                        const rawArgs = meta.args || msg.args || {};
                         let args = "";
-                        const rawArgs = msg.args || meta.args || {};
                         try {
                             args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
-                        } catch (e) { args = JSON.stringify(rawArgs); }
+                        } catch { args = JSON.stringify(rawArgs); }
 
-                        const toolName = msg.tool || meta.tool || meta.name || meta.tool_name || "Unknown Tool";
+                        const toolName = meta.tool || meta.name || meta.tool_name || msg.tool || "Unknown Tool";
                         lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), {
                             type: 'tool_call',
                             tool: toolName,
                             args: args
                         }];
                     } else if (type === 'tool_result') {
-                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), { type: 'tool_result', content: msg.content }];
+                        lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), {
+                            type: 'tool_result',
+                            content: msg.content
+                        }];
                     }
                 } else {
-                    // No assistant message to attach to - create a placeholder
-                    const newMsg = {
+                    // No assistant message yet — create a placeholder bubble
+                    const newMsg: any = {
                         ...msg,
-                        thinkingSteps: type === 'thinking' ? [{ type: 'thinking', content: msg.content }] : [],
-                        isProcessing: true, // Default to processing until we see a final message
+                        thinkingSteps: [],
+                        isProcessing: true,
                         content: ""
                     };
+                    if (type === 'thinking') {
+                        newMsg.thinkingSteps = [{ type: 'thinking', content: msg.content, metadata: meta }];
+                    }
                     acc.push(newMsg);
                 }
             } else if (type === 'status' || type === 'cancelled') {
@@ -77,18 +187,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         lastMsg.isProcessing = false;
                     }
                 }
-                // Skip status messages from being added as new bubbles
-                return acc;
+                return acc; // skip status bubbles
             } else if (type === 'final' || type === 'message') {
-                // Final or regular message - add it
                 if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
-                    // Merge with existing empty assistant message (from thinking steps)
                     lastMsg.content = msg.content || "";
                     lastMsg.id = msg.id;
                     lastMsg.created_at = msg.created_at;
-                    lastMsg.isProcessing = false; // Mark as done!
+                    lastMsg.isProcessing = false;
                 } else {
-                    // New assistant message
                     acc.push({
                         ...msg,
                         thinkingSteps: [],
@@ -113,6 +219,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>([]);
     const [uploadingImage, setUploadingImage] = useState(false);
+    const [extractingMemory, setExtractingMemory] = useState(false);
     const router = useRouter();
 
     // Refs
@@ -137,6 +244,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             console.error("Error creating new chat:", e);
         } finally {
             setCreatingNewChat(false);
+        }
+    };
+
+    const handleExtractMemory = async () => {
+        if (!chatId || extractingMemory) return;
+        setExtractingMemory(true);
+        try {
+            const result = await extractBehavioralInstructions(chatId);
+            if (result.success) {
+                alert(`Successfully extracted ${result.count} behavioral instructions from this chat.`);
+            } else {
+                alert(`Extraction failed: ${result.error}`);
+            }
+        } catch (e) {
+            console.error("Error extracting memory:", e);
+            alert("An error occurred during memory extraction.");
+        } finally {
+            setExtractingMemory(false);
         }
     };
 
@@ -237,23 +362,30 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
                             // Handle intermediate types by updating the last assistant message
                             if (messageType === 'thinking' || messageType === 'tool_call' || messageType === 'tool_result') {
+                                // Deduplicate: skip the numbered-step record (has 'step', no 'source')
+                                // The canonical tool_wrapper record arrives right after with full metadata.
+                                const rtMeta = typeof newMsg.metadata === 'string'
+                                    ? (() => { try { return JSON.parse(newMsg.metadata) || {}; } catch { return {}; } })()
+                                    : (newMsg.metadata || {});
+                                if ((messageType === 'tool_call' || messageType === 'tool_result')
+                                    && rtMeta.step !== undefined
+                                    && rtMeta.source !== 'tool_wrapper') {
+                                    return prev; // skip — tool_wrapper version is coming
+                                }
+
                                 return prev.map((msg, index, array) => {
                                     if (index !== findLastAssistantIndex(array)) return msg;
 
                                     let newStep: any = null;
                                     if (messageType === 'thinking') {
-                                        const metaRaw = newMsg.metadata || {};
-                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
-                                        newStep = { type: 'thinking', content: newMsg.content, metadata: meta };
+                                        newStep = { type: 'thinking', content: newMsg.content, metadata: rtMeta };
                                     } else if (messageType === 'tool_call') {
+                                        const rawArgs = rtMeta.args || newMsg.args || {};
                                         let args = "";
-                                        const metaRaw = newMsg.metadata || {};
-                                        const meta = typeof metaRaw === 'string' ? (JSON.parse(metaRaw) || {}) : metaRaw;
-                                        const rawArgs = newMsg.args || meta.args || {};
                                         try {
                                             args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs, null, 2);
-                                        } catch (e) { args = JSON.stringify(rawArgs); }
-                                        const toolName = newMsg.tool || meta.tool || meta.name || meta.tool_name || "Unknown Tool";
+                                        } catch { args = JSON.stringify(rawArgs); }
+                                        const toolName = rtMeta.tool || rtMeta.name || rtMeta.tool_name || newMsg.tool || "Unknown Tool";
                                         newStep = { type: 'tool_call', tool: toolName, args: args };
                                     } else if (messageType === 'tool_result') {
                                         newStep = { type: 'tool_result', content: newMsg.content };
@@ -262,9 +394,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     return {
                                         ...msg,
                                         thinkingSteps: [...(msg.thinkingSteps || []), newStep],
-                                        // Ensure it stays processing until final message
                                         isProcessing: true,
-                                        // Update ID if we need to track it, though usually we stay with the placeholder ID until final
                                     };
                                 });
                             } else if (messageType === 'status') {
@@ -845,6 +975,25 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         )}
                         <span>{creatingNewChat ? "Creating..." : "New Chat"}</span>
                     </button>
+
+                    <button
+                        onClick={handleExtractMemory}
+                        disabled={extractingMemory || loading}
+                        className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ml-2
+                            bg-purple-500/10 text-purple-600 border border-purple-500/20
+                            hover:bg-purple-500 hover:text-white hover:border-purple-500
+                            hover:shadow-[0_0_16px_rgba(168,85,247,0.25)]
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            transition-all duration-200 ease-out"
+                        title="Extract and learn from this chat's behavior"
+                    >
+                        {extractingMemory ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <Brain className="h-3.5 w-3.5 transition-transform duration-300 group-hover:scale-110" />
+                        )}
+                        <span>{extractingMemory ? "Extracting..." : "Extract Memory"}</span>
+                    </button>
                 </div>
             )}
 
@@ -933,6 +1082,26 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         } catch (e) { }
                                     }
 
+                                    // Deduplication: if the final displayContent is substantially the
+                                    // same as a thinking step that was already rendered with full markdown,
+                                    // skip it so the user doesn't see the same content twice.
+                                    const thinkingTexts = (msg.thinkingSteps || [])
+                                        .filter((s: any) => s.type === 'thinking' || (!s.type && s.content))
+                                        .map((s: any) => (typeof s === 'string' ? s : s.content || '').trim())
+                                        .filter((t: string) => t.length > 200); // Only consider large blocks
+
+                                    const isDuplicateOfThinkingStep = thinkingTexts.some((t: string) => {
+                                        const dc = displayContent.trim();
+                                        if (!dc || dc.length < 100) return false;
+                                        // Check if they share a very large common prefix (>80% of displayContent)
+                                        const minLen = Math.min(t.length, dc.length);
+                                        let common = 0;
+                                        for (let ci = 0; ci < minLen; ci++) {
+                                            if (t[ci] === dc[ci]) common++;
+                                        }
+                                        return common / dc.length > 0.85;
+                                    });
+
                                     return (
                                         <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed" id={`message-content-${i}`}>
                                             {/* Render Mixed Thoughts & Toggles */}
@@ -959,68 +1128,135 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
                                                         return groups.map((group: any, idx: number) => {
                                                             if (group.type === 'tool_group') {
-                                                                const toolCount = group.steps.filter((s: any) => s.type === 'tool_call').length;
+                                                                // Pair up tool_calls with their results
+                                                                const pairs: { call: any; result: any | null }[] = [];
+                                                                let i2 = 0;
+                                                                while (i2 < group.steps.length) {
+                                                                    const step = group.steps[i2];
+                                                                    if (step.type === 'tool_call') {
+                                                                        const next = group.steps[i2 + 1];
+                                                                        if (next && next.type === 'tool_result') {
+                                                                            pairs.push({ call: step, result: next });
+                                                                            i2 += 2;
+                                                                        } else {
+                                                                            pairs.push({ call: step, result: null });
+                                                                            i2++;
+                                                                        }
+                                                                    } else {
+                                                                        i2++;
+                                                                    }
+                                                                }
+
                                                                 return (
-                                                                    <details key={idx} className="group border border-border/50 rounded-lg bg-muted/30 overflow-hidden mb-2">
-                                                                        <summary className="flex items-center gap-2 p-2 px-3 text-xs font-medium cursor-pointer hover:bg-muted/50 select-none transition-colors text-muted-foreground">
-                                                                            <div className="flex items-center justify-center h-4 w-4 transition-transform group-open:rotate-90">
-                                                                                <ChevronDown className="h-3 w-3" />
-                                                                            </div>
-                                                                            <span>Used {toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
-                                                                        </summary>
-                                                                        <div className="p-2 border-t border-border/40 flex flex-col gap-2 bg-background/30">
-                                                                            {group.steps.map((step: any, stepIdx: number) => {
-                                                                                if (step.type === 'tool_call') {
-                                                                                    return (
-                                                                                        <div key={stepIdx} className="border border-border/50 rounded overflow-hidden">
-                                                                                            <div className="bg-muted/50 px-2 py-1 text-[10px] font-mono text-primary/70 border-b border-border/50 flex items-center justify-between">
-                                                                                                <span>Calling {step.tool}...</span>
-                                                                                            </div>
-                                                                                            <pre className="text-[10px] bg-background/50 p-2 overflow-x-auto text-muted-foreground m-0">
-                                                                                                {step.args && (typeof step.args === 'string' ? step.args : JSON.stringify(step.args, null, 2))}
-                                                                                            </pre>
+                                                                    <div key={idx} className="flex flex-col gap-2 mb-2">
+                                                                        {pairs.map((pair, pairIdx) => {
+                                                                            const toolName = pair.call.tool || 'tool';
+
+                                                                            // Parse args for display
+                                                                            let argsDisplay = '';
+                                                                            try {
+                                                                                const raw = pair.call.args;
+                                                                                const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                                                                                argsDisplay = JSON.stringify(parsed, null, 2);
+                                                                            } catch {
+                                                                                argsDisplay = typeof pair.call.args === 'string' ? pair.call.args : JSON.stringify(pair.call.args || {});
+                                                                            }
+
+                                                                            // Extract readable text from tool result
+                                                                            let resultText = '';
+                                                                            if (pair.result) {
+                                                                                const raw = pair.result.content || '';
+                                                                                try {
+                                                                                    // Handle JSON array with type/text blocks
+                                                                                    const parsed = JSON.parse(raw);
+                                                                                    if (Array.isArray(parsed)) {
+                                                                                        resultText = parsed.map((b: any) => b.text || b.content || '').join('\n').trim();
+                                                                                    } else {
+                                                                                        resultText = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+                                                                                    }
+                                                                                } catch {
+                                                                                    // Handle Python-style list strings: [{'type': 'text', 'text': '...'}]
+                                                                                    const textMatches = [...raw.matchAll(/'text'\s*:\s* '((?:[^'\\]|\\.)*)'/g)];
+                                                                                    if (textMatches.length > 0) {
+                                                                                        resultText = textMatches
+                                                                                            .map((m: any) => m[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\'/g, "'").replace(/\\\\/g, '\\'))
+                                                                                            .join('\n')
+                                                                                            .trim();
+                                                                                    } else {
+                                                                                        resultText = raw;
+                                                                                    }
+                                                                                }
+                                                                            }
+
+                                                                            const hasResult = !!resultText.trim();
+                                                                            const resultPreview = resultText.length > 80 ? resultText.slice(0, 80) + '…' : resultText;
+
+                                                                            return (
+                                                                                <details key={pairIdx} className="group/tc border border-border/60 rounded-lg overflow-hidden bg-muted/20 hover:bg-muted/30 transition-colors">
+                                                                                    <summary className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none list-none">
+                                                                                        <div className="h-4 w-4 transition-transform group-open/tc:rotate-90 flex-shrink-0 text-muted-foreground">
+                                                                                            <ChevronDown className="h-4 w-4" />
                                                                                         </div>
-                                                                                    );
-                                                                                }
-                                                                                if (step.type === 'tool_result') {
-                                                                                    return (
-                                                                                        <details key={stepIdx} className="group/res border border-emerald-500/20 rounded bg-emerald-500/5 overflow-hidden">
-                                                                                            <summary className="flex items-center gap-2 px-2 py-1 text-[10px] font-medium cursor-pointer hover:bg-emerald-500/10 select-none transition-colors text-emerald-600/80">
-                                                                                                <div className="flex items-center justify-center h-3 w-3 transition-transform group-open/res:rotate-90">
-                                                                                                    <ChevronDown className="h-2 w-2" />
-                                                                                                </div>
-                                                                                                <span>Result</span>
-                                                                                            </summary>
-                                                                                            <div className="p-2 pt-0 pl-6 border-t border-transparent group-open/res:border-emerald-500/10">
-                                                                                                <pre className="text-[10px] whitespace-pre-wrap text-muted-foreground mt-1 max-h-[200px] overflow-y-auto font-mono">
-                                                                                                    {step.content}
-                                                                                                </pre>
+                                                                                        <span className="text-[11px] font-mono font-semibold text-primary/80">{toolName}</span>
+                                                                                        {!hasResult && (
+                                                                                            <span className="ml-auto text-[10px] text-amber-500/80 flex items-center gap-1">
+                                                                                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                                                                                                running…
+                                                                                            </span>
+                                                                                        )}
+                                                                                        {hasResult && (
+                                                                                            <span className="ml-auto text-[10px] text-emerald-500/80 flex items-center gap-1">
+                                                                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                                                                                done
+                                                                                            </span>
+                                                                                        )}
+                                                                                    </summary>
+                                                                                    <div className="border-t border-border/40 bg-background/40">
+                                                                                        {/* Args */}
+                                                                                        {argsDisplay && (
+                                                                                            <div className="px-3 py-2">
+                                                                                                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1">Input</div>
+                                                                                                <pre className="text-[11px] bg-muted/40 rounded p-2 overflow-x-auto text-foreground/70 font-mono leading-relaxed m-0 whitespace-pre-wrap">{argsDisplay}</pre>
                                                                                             </div>
-                                                                                        </details>
-                                                                                    );
-                                                                                }
-                                                                                return null;
-                                                                            })}
-                                                                        </div>
-                                                                    </details>
+                                                                                        )}
+                                                                                        {/* Result */}
+                                                                                        {hasResult && (
+                                                                                            <div className="px-3 pb-2">
+                                                                                                <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70 mb-1">Result</div>
+                                                                                                <pre className="text-[11px] bg-emerald-500/5 border border-emerald-500/10 rounded p-2 overflow-x-auto max-h-[250px] overflow-y-auto text-foreground/70 font-mono leading-relaxed m-0 whitespace-pre-wrap">{resultText}</pre>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </details>
+                                                                            );
+                                                                        })}
+                                                                    </div>
                                                                 );
                                                             }
 
                                                             // Handle string/thinking steps
                                                             const content = typeof group === 'string' ? group : group.content;
+                                                            if (!content) return null;
+
                                                             // Check for agent_reasoning metadata
                                                             const isAgentReasoning = group.metadata?.source === 'agent_reasoning';
 
-                                                            if (isAgentReasoning) {
+                                                            // Detect if this thinking step is a short status line (no markdown)
+                                                            // vs a rich output block that deserves full rendering.
+                                                            // Short lines (< 120 chars, no markdown markers) are shown inline;
+                                                            // longer / markdown-containing content gets full ReactMarkdown.
+                                                            const looksLikeMarkdown = /[#*|>\-`\[\]!]/.test(content) || content.length > 120;
+
+                                                            if (isAgentReasoning || looksLikeMarkdown) {
                                                                 return (
-                                                                    <div key={idx} className="text-foreground/90 whitespace-pre-wrap mb-3 leading-relaxed">
-                                                                        {content}
+                                                                    <div key={idx} className="thinking-md-block text-foreground/90 mb-3 leading-relaxed border-l-2 border-muted-foreground/20 pl-3">
+                                                                        <MarkdownContent content={content} compact />
                                                                     </div>
                                                                 );
                                                             }
 
                                                             return (
-                                                                <div key={idx} className="py-1  mb-2">
+                                                                <div key={idx} className="py-0.5 mb-1 text-sm text-muted-foreground italic">
                                                                     {content}
                                                                 </div>
                                                             );
@@ -1029,73 +1265,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                 </div>
                                             )}
 
-                                            {displayContent && (
-                                                <ReactMarkdown
-                                                    remarkPlugins={[remarkGfm]}
-                                                    components={{
-                                                        code: ({ node, ...props }: any) => {
-                                                            const match = /language-(\w+)/.exec((props.className || ''))
-                                                            if (match && match[1] === 'chart') {
-                                                                return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
-                                                            }
-                                                            return !match ? (
-                                                                <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
-                                                            ) : (
-                                                                <code className="block font-mono text-xs md:text-sm" {...props} />
-                                                            )
-                                                        },
-                                                        pre: ({ node, ...props }: any) => (
-                                                            <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
-                                                        ),
-                                                        img: ({ node, ...props }: any) => (
-                                                            // eslint-disable-next-line @next/next/no-img-element
-                                                            <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
-                                                        ),
-                                                        p: ({ node, ...props }: any) => (
-                                                            <p className="mb-3 last:mb-0 leading-7" {...props} />
-                                                        ),
-                                                        a: ({ node, ...props }: any) => (
-                                                            <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
-                                                        ),
-                                                        ul: ({ node, ...props }: any) => (
-                                                            <ul className="list-disc pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
-                                                        ),
-                                                        ol: ({ node, ...props }: any) => (
-                                                            <ol className="list-decimal pl-6 mb-3 space-y-1.5 marker:text-muted-foreground" {...props} />
-                                                        ),
-                                                        li: ({ node, ...props }: any) => (
-                                                            <li className="pl-1" {...props} />
-                                                        ),
-                                                        blockquote: ({ node, ...props }: any) => (
-                                                            <blockquote className="border-l-4 border-primary/20 pl-4 py-1 italic text-muted-foreground my-4" {...props} />
-                                                        ),
-                                                        table: ({ node, ...props }: any) => (
-                                                            <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
-                                                                <table className="w-full text-sm text-left border-collapse" {...props} />
-                                                            </div>
-                                                        ),
-                                                        thead: ({ node, ...props }: any) => (
-                                                            <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
-                                                        ),
-                                                        tbody: ({ node, ...props }: any) => (
-                                                            <tbody className="divide-y divide-border/50" {...props} />
-                                                        ),
-                                                        tr: ({ node, ...props }: any) => (
-                                                            <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
-                                                        ),
-                                                        th: ({ node, ...props }: any) => (
-                                                            <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
-                                                        ),
-                                                        hr: ({ node, ...props }: any) => (
-                                                            <hr className="my-6 border-border/50" {...props} />
-                                                        ),
-                                                        td: ({ node, ...props }: any) => (
-                                                            <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
-                                                        )
-                                                    }}
-                                                >
-                                                    {displayContent}
-                                                </ReactMarkdown>
+                                            {displayContent && !isDuplicateOfThinkingStep && (
+                                                <MarkdownContent content={displayContent} />
                                             )}
 
                                             {(msg.isProcessing || (loading && i === messages.length - 1)) && (

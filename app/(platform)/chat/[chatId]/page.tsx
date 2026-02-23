@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { StandaloneChatClient } from "@/components/chat/StandaloneChatClient";
+import { verifySuperAdmin } from "@/lib/actions/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -13,13 +14,19 @@ export default async function StandaloneChatPage({ params }: { params: Promise<{
         return <div>Please login first.</div>;
     }
 
-    // Verify chat access
-    const { data: chat } = await supabase
+    const isSuperAdmin = await verifySuperAdmin();
+
+    // Super admins can view any chat; regular users only their own
+    const chatQuery = supabase
         .from("chats")
         .select("*")
-        .eq("id", chatId)
-        .eq("user_id", user.id)
-        .single();
+        .eq("id", chatId);
+
+    if (!isSuperAdmin) {
+        chatQuery.eq("user_id", user.id);
+    }
+
+    const { data: chat } = await chatQuery.single();
 
     if (!chat) notFound();
 
