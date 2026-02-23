@@ -35,16 +35,6 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
-    // Fetch documents
-    const { data: documents } = await supabase
-        .from("documents")
-        .select("*")
-        .eq("project_id", id)
-        .order("created_at", { ascending: false });
-
-    // Fetch memories
-    const memories = await getProjectMemories(id);
-
     // Filter out agent-generated chats:
     // 1. New ones (prefixed with hidden \u200B)
     // 2. Legacy ones matching the Salesforce lookup pattern seen in clutter
@@ -53,13 +43,42 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         !c.title?.startsWith("Look up Salesforce Opportu")
     );
 
+    // Fetch documents
+    const { data: documents } = await supabase
+        .from("documents")
+        .select("*")
+        .eq("project_id", id)
+        .order("created_at", { ascending: false });
+
+    // Fetch memories
+    const projectMemories = await getProjectMemories(id);
+
+    // Fetch agent instructions linked to this project
+    const { data: agentInstructions } = await supabase
+        .from("agent_instructions")
+        .select("id, instruction, created_at, is_active")
+        .eq("project_id", id)
+        .eq("is_active", true);
+
+    // Map instructions to memory format for unified display
+    const mappedInstructions = (agentInstructions || []).map(inst => ({
+        id: inst.id,
+        memory_type: 'behavioral',
+        content: inst.instruction,
+        sentiment: 'neutral',
+        importance: 10,
+        created_at: inst.created_at
+    }));
+
+    const allMemories = [...mappedInstructions, ...projectMemories];
+
     return (
         <ProjectPageClient
             project={project}
             isOwner={isOwner}
             initialChats={filteredChats}
             initialDocuments={documents || []}
-            initialMemories={memories}
+            initialMemories={allMemories}
         />
     );
 }

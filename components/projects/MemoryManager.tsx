@@ -52,6 +52,7 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
         const colors: Record<string, string> = {
             insight: "bg-blue-500/10 text-blue-500",
             preference: "bg-purple-500/10 text-purple-500",
+            behavioral: "bg-amber-500/10 text-amber-500",
             issue: "bg-red-500/10 text-red-500",
             solution: "bg-green-500/10 text-green-500",
             feedback: "bg-yellow-500/10 text-yellow-500"
@@ -63,7 +64,8 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
         const emojis: Record<string, string> = {
             positive: "😊",
             negative: "😞",
-            neutral: "😐"
+            neutral: "😐",
+            rule: "⚡"
         };
         return emojis[sentiment] || "•";
     };

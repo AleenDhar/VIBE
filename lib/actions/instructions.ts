@@ -11,58 +11,97 @@ export async function extractBehavioralInstructions(chatId: string) {
         return { success: false, error: "Unauthorized" };
     }
 
-    // Get chat messages
-    const { data: messages } = await supabase
-        .from("chat_messages")
-        .select("role, content")
-        .eq("chat_id", chatId)
-        .order("created_at", { ascending: true });
+    // Get chat messages and project_id in one go
+    const { data: chatData, error: chatError } = await supabase
+        .from("chats")
+        .select("project_id, chat_messages(role, content)")
+        .eq("id", chatId)
+        .order("created_at", { foreignTable: "chat_messages", ascending: true })
+        .single();
+
+    if (chatError) {
+        console.error("[Instructions] Error fetching chat data:", chatError);
+        return { success: false, error: chatError.message };
+    }
+
+    const messages = chatData?.chat_messages as any[];
+    const projectId = chatData?.project_id;
 
     if (!messages || messages.length === 0) {
+        console.warn("[Instructions] No messages found for chat", chatId);
         return { success: false, error: "No messages found" };
     }
 
+    console.log(`[Instructions] Found ${messages.length} total raw messages`);
+
+    // Filter out noisy status/processing messages to give the AI a cleaner conversation
+    const filteredMessages = (messages as any[]).filter(m => {
+        // Skip purely status messages or short processing updates that don't contain real info
+        if (m.content === "processing" || m.content === "Thinking...") return false;
+        if (m.type === "status") return false;
+        return true;
+    });
+
+    console.log(`[Instructions] Filtered down to ${filteredMessages.length} meaningful messages`);
+
     // Construct conversation for analysis
-    const conversation = (messages as any[]).map(m => `${m.role}: ${m.content}`).join("\n\n");
+    const conversation = filteredMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
 
-    // Call AI to extract instructions
-    const analysisPrompt = `Analyze this conversation between a user and an AI assistant.
-Focus on areas where the assistant's response was not good, misunderstood the user, or required correction by the user.
-If you find such instances, create short, clear behavioral instructions for the assistant to follow in the future to avoid these mistakes.
-For example, "Always respond with code snippets when asked for examples" or "Never use overly formal language".
+    // Fetch custom prompts from config
+    const { data: configPrompts } = await supabase
+        .from("app_config")
+        .select("key, value")
+        .in("key", ["instruction_extraction_system_prompt", "instruction_extraction_analysis_prompt"]);
 
-Only extract instructions if the assistant made a mistake or the user implicitly/explicitly corrected the assistant.
+    const dbSystemPrompt = configPrompts?.find(p => p.key === "instruction_extraction_system_prompt")?.value;
+    const dbAnalysisPrompt = configPrompts?.find(p => p.key === "instruction_extraction_analysis_prompt")?.value;
 
-Conversation:
-${conversation}
+    const finalSystemPrompt = dbSystemPrompt || "You are an expert Behavior Analyst for AI agents. You excel at spotting user preferences and AI behavioral mistakes even when they aren't explicitly stated as 'rules'.";
 
-Return a JSON array of instructions (each instruction as a string).`;
+    // Construct analysis prompt using DB template or fallback
+    let finalAnalysisPrompt = "";
+    if (dbAnalysisPrompt) {
+        finalAnalysisPrompt = dbAnalysisPrompt.replace("{{CONVERSATION}}", conversation);
+    } else {
+        finalAnalysisPrompt = `Analyze the following conversation history.\n...\nConversation History:\n---\n${conversation}\n---\n...`;
+    }
 
     try {
+        console.log("[Instructions] Sending cleaned conversation to AI analyzer...");
+        const payload = {
+            messages: [{ role: "user", content: finalAnalysisPrompt }],
+            system_prompt: finalSystemPrompt,
+            model: "openai:gpt-4o",
+            structured_output_format: {
+                type: "object",
+                properties: {
+                    instructions: {
+                        type: "array",
+                        items: { type: "string" }
+                    }
+                },
+                required: ["instructions"]
+            }
+        };
+
         const response = await fetch("http://13.201.66.23:8000/api/chat/structured", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                messages: [{ role: "user", content: analysisPrompt }],
-                system_prompt: "You are an AI behavior reviewer. Extract behavioral rules based on AI mistakes in the conversation.",
-                model: "openai:gpt-4o", // using gpt-4o or gpt-4 for better reasoning
-                structured_output_format: {
-                    type: "object",
-                    properties: {
-                        instructions: {
-                            type: "array",
-                            items: {
-                                type: "string"
-                            }
-                        }
-                    },
-                    required: ["instructions"]
-                }
-            })
+            body: JSON.stringify(payload)
         });
 
-        const data = await response.json();
-        const instructions: string[] = data.instructions || [];
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("[Instructions] AI API failed:", response.status, errorText);
+            return { success: false, error: `AI API Error: ${response.status}` };
+        }
+
+        const responseData = await response.json();
+        console.log("[Instructions] AI Decision Data:", JSON.stringify(responseData, null, 2));
+
+        // The API returns the structured output inside a 'data' field
+        const instructions: string[] = responseData.data?.instructions || responseData.instructions || [];
+        console.log(`[Instructions] Extracted ${instructions.length} instructions:`, instructions);
 
         if (instructions.length === 0) {
             return { success: true, count: 0 };
@@ -72,6 +111,7 @@ Return a JSON array of instructions (each instruction as a string).`;
         const instructionsToInsert = instructions.map(inst => ({
             user_id: user.id,
             source_chat_id: chatId,
+            project_id: projectId,
             instruction: inst,
             is_active: true
         }));

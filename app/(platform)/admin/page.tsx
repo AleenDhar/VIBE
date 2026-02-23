@@ -1,5 +1,6 @@
-import { verifyAdmin, verifySuperAdmin, getBasePrompt, getAllUsers, getApiKeys, getCurrentUserRole } from "@/lib/actions/admin";
+import { verifyAdmin, verifySuperAdmin, getBasePrompt, getAllUsers, getApiKeys, getCurrentUserRole, getExtractionPrompts } from "@/lib/actions/admin";
 import { PromptEditor } from "@/components/admin/PromptEditor";
+import { ExtractionPromptEditor } from "@/components/admin/ExtractionPromptEditor";
 import { ApiKeyList } from "@/components/admin/ApiKeyList";
 import { UserList } from "@/components/admin/UserList";
 import { redirect } from "next/navigation";
@@ -15,6 +16,7 @@ export default async function AdminPage() {
     }
 
     const basePrompt = await getBasePrompt();
+    const extractionPrompts = await getExtractionPrompts();
     const apiKeys = await getApiKeys();
     const users = await getAllUsers();
     const currentUserRole = await getCurrentUserRole();
@@ -60,6 +62,13 @@ export default async function AdminPage() {
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
                 <PromptEditor initialPrompt={basePrompt} />
+            </section>
+
+            <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
+                <ExtractionPromptEditor
+                    initialSystem={extractionPrompts.system}
+                    initialAnalysis={extractionPrompts.analysis}
+                />
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
