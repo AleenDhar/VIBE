@@ -184,3 +184,67 @@ export async function addManualMemory(projectId: string, data: {
     revalidatePath(`/projects/${projectId}`);
     return { success: true };
 }
+
+export async function updateMemory(memoryId: string, projectId: string, data: {
+    content: string;
+    memory_type: 'insight' | 'preference' | 'behavioral' | 'issue' | 'solution' | 'feedback';
+    importance: number;
+    sentiment?: 'positive' | 'negative' | 'neutral' | 'rule';
+}) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Unauthorized" };
+
+    if (data.memory_type === 'behavioral') {
+        // Behavioral instructions are in a separate table
+        // Note: If it was originally a memory and changed to behavioral, we might need more complex logic,
+        // but for now let's assume update stays within the same table structure or we handle it simply.
+        const { error } = await supabase
+            .from("agent_instructions")
+            .update({
+                instruction: data.content,
+                is_active: true
+                // Note: project_id and user_id usually don't change
+            })
+            .eq("id", memoryId);
+
+        if (error) {
+            // If it failed, it might be in project_memories (e.g. if the user changed the type)
+            const { error: memError } = await supabase
+                .from("project_memories")
+                .update({
+                    content: data.content,
+                    memory_type: data.memory_type,
+                    importance: data.importance,
+                    sentiment: data.sentiment || 'neutral'
+                })
+                .eq("id", memoryId);
+            if (memError) return { success: false, error: memError.message };
+        }
+    } else {
+        // Try project_memories first
+        const { error } = await supabase
+            .from("project_memories")
+            .update({
+                content: data.content,
+                memory_type: data.memory_type,
+                importance: data.importance,
+                sentiment: data.sentiment || 'neutral'
+            })
+            .eq("id", memoryId);
+
+        if (error) {
+            // Try agent_instructions
+            const { error: instError } = await supabase
+                .from("agent_instructions")
+                .update({
+                    instruction: data.content
+                })
+                .eq("id", memoryId);
+            if (instError) return { success: false, error: instError.message };
+        }
+    }
+
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true };
+}

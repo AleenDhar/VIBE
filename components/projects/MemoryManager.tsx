@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Brain, Trash2, Loader2, Plus, X } from "lucide-react";
-import { extractChatMemories, deleteMemory, addManualMemory } from "@/lib/actions/memories";
+import { Brain, Trash2, Loader2, Plus, X, Edit2 } from "lucide-react";
+import { extractChatMemories, deleteMemory, addManualMemory, updateMemory } from "@/lib/actions/memories";
 
 interface Memory {
     id: string;
@@ -23,13 +23,14 @@ interface MemoryManagerProps {
 export function MemoryManager({ projectId, chatId, memories: initialMemories }: MemoryManagerProps) {
     const [memories, setMemories] = useState(initialMemories);
     const [extracting, setExtracting] = useState(false);
+    const [editingId, setEditingId] = useState<string | null>(null);
     const [isAdding, setIsAdding] = useState(false);
     const [saving, setSaving] = useState(false);
 
-    // Form state
-    const [newContent, setNewContent] = useState("");
-    const [newType, setNewType] = useState<any>("insight");
-    const [newImportance, setNewImportance] = useState(5);
+    // Form state (Shared for Add/Edit)
+    const [content, setContent] = useState("");
+    const [type, setType] = useState<any>("insight");
+    const [importance, setImportance] = useState(5);
 
     const handleExtractMemories = async () => {
         if (!chatId) return;
@@ -47,24 +48,59 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
     };
 
     const handleAddManual = async () => {
-        if (!newContent.trim()) return;
+        if (!content.trim()) return;
 
         setSaving(true);
         const result = await addManualMemory(projectId, {
-            content: newContent,
-            memory_type: newType,
-            importance: newImportance,
-            sentiment: newType === 'behavioral' ? 'rule' : 'neutral'
+            content,
+            memory_type: type,
+            importance: importance,
+            sentiment: type === 'behavioral' ? 'rule' : 'neutral'
         });
         setSaving(false);
 
         if (result.success) {
-            setIsAdding(false);
-            setNewContent("");
-            window.location.reload(); // Simplest way to refresh the list with server data
+            cancelAction();
+            window.location.reload();
         } else {
             alert(`❌ Error: ${result.error}`);
         }
+    };
+
+    const handleUpdate = async () => {
+        if (!editingId || !content.trim()) return;
+
+        setSaving(true);
+        const result = await updateMemory(editingId, projectId, {
+            content,
+            memory_type: type,
+            importance: importance,
+            sentiment: type === 'behavioral' ? 'rule' : 'neutral'
+        });
+        setSaving(false);
+
+        if (result.success) {
+            cancelAction();
+            window.location.reload();
+        } else {
+            alert(`❌ Error: ${result.error}`);
+        }
+    };
+
+    const startEditing = (memory: Memory) => {
+        setEditingId(memory.id);
+        setIsAdding(false);
+        setContent(memory.content);
+        setType(memory.memory_type);
+        setImportance(memory.importance);
+    };
+
+    const cancelAction = () => {
+        setIsAdding(false);
+        setEditingId(null);
+        setContent("");
+        setType("insight");
+        setImportance(5);
     };
 
     const handleDeleteMemory = async (memoryId: string) => {
@@ -99,9 +135,12 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6 rounded-full hover:bg-primary/10 hover:text-primary transition-colors"
-                        onClick={() => setIsAdding(!isAdding)}
+                        onClick={() => {
+                            if (isAdding || editingId) cancelAction();
+                            else setIsAdding(true);
+                        }}
                     >
-                        {isAdding ? <X className="h-3 w-3" /> : <Plus className="h-3.5 w-3.5" />}
+                        {(isAdding || editingId) ? <X className="h-3 w-3" /> : <Plus className="h-3.5 w-3.5" />}
                     </Button>
                 </div>
 
@@ -123,14 +162,19 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                 )}
             </div>
 
-            {/* Quick Add Form */}
-            {isAdding && (
-                <div className="p-4 border rounded-lg bg-muted/30 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+            {/* Add/Edit Form */}
+            {(isAdding || editingId) && (
+                <div className="p-4 border rounded-lg bg-primary/5 dark:bg-primary/10 border-primary/20 space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold uppercase tracking-wider text-primary">
+                            {editingId ? "Edit Memory" : "Add New Memory"}
+                        </span>
+                    </div>
                     <div className="flex gap-2">
                         <select
                             className="bg-background border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary outline-none"
-                            value={newType}
-                            onChange={(e) => setNewType(e.target.value)}
+                            value={type}
+                            onChange={(e) => setType(e.target.value)}
                         >
                             <option value="insight">Insight</option>
                             <option value="preference">Preference</option>
@@ -141,8 +185,8 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                         </select>
                         <select
                             className="bg-background border rounded px-2 py-1 text-xs focus:ring-1 focus:ring-primary outline-none"
-                            value={newImportance}
-                            onChange={(e) => setNewImportance(parseInt(e.target.value))}
+                            value={importance}
+                            onChange={(e) => setImportance(parseInt(e.target.value))}
                         >
                             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
                                 <option key={n} value={n}>Imp: {n}</option>
@@ -150,16 +194,17 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                         </select>
                     </div>
                     <textarea
-                        className="w-full bg-background border rounded-lg p-3 text-sm min-h-[80px] focus:ring-1 focus:ring-primary outline-none resize-none"
+                        className="w-full bg-background border rounded-lg p-3 text-sm min-h-[100px] focus:ring-1 focus:ring-primary outline-none resize-none"
                         placeholder="What should the AI remember?"
-                        value={newContent}
-                        onChange={(e) => setNewContent(e.target.value)}
+                        value={content}
+                        onChange={(e) => setContent(e.target.value)}
+                        autoFocus
                     />
                     <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="ghost" onClick={() => setIsAdding(false)}>Cancel</Button>
-                        <Button size="sm" onClick={handleAddManual} disabled={saving || !newContent.trim()}>
-                            {saving ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : <Plus className="h-3 w-3 animate-spin mr-2 hidden" />}
-                            {saving ? "Saving..." : "Add Memory"}
+                        <Button size="sm" variant="ghost" onClick={cancelAction}>Cancel</Button>
+                        <Button size="sm" onClick={editingId ? handleUpdate : handleAddManual} disabled={saving || !content.trim()}>
+                            {saving ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                            {saving ? "Saving..." : (editingId ? "Update Memory" : "Add Memory")}
                         </Button>
                     </div>
                 </div>
@@ -188,14 +233,24 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                                     </div>
                                     <p className="text-sm leading-relaxed">{memory.content}</p>
                                 </div>
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                                    onClick={() => handleDeleteMemory(memory.id)}
-                                >
-                                    <Trash2 className="h-3 w-3" />
-                                </Button>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6 text-muted-foreground hover:text-primary transition-colors"
+                                        onClick={() => startEditing(memory)}
+                                    >
+                                        <Edit2 className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6 text-muted-foreground hover:text-destructive transition-colors"
+                                        onClick={() => handleDeleteMemory(memory.id)}
+                                    >
+                                        <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                </div>
                             </div>
                         </div>
                     ))}
