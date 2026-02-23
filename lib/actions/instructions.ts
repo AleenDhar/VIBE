@@ -47,33 +47,30 @@ export async function extractBehavioralInstructions(chatId: string) {
     // Construct conversation for analysis
     const conversation = filteredMessages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n");
 
-    // Call AI to extract instructions
-    const analysisPrompt = `Analyze the following conversation history.
-Your task is to identify specific behavioral rules, preferences, or corrections that the AI should remember for future interactions with this user.
+    // Fetch custom prompts from config
+    const { data: configPrompts } = await supabase
+        .from("app_config")
+        .select("key, value")
+        .in("key", ["instruction_extraction_system_prompt", "instruction_extraction_analysis_prompt"]);
 
-BE THOROUGH. Look for:
-- Direct corrections (e.g., "Don't do X", "Use Y instead").
-- Subtle preferences (e.g., User seems to prefer technical details, or wants faster summaries).
-- AI Failure points: Did the AI use a tool incorrectly? Did it miss a requirement?
-- Tone adjustments: Should the AI be more formal, more concise, or more proactive?
+    const dbSystemPrompt = configPrompts?.find(p => p.key === "instruction_extraction_system_prompt")?.value;
+    const dbAnalysisPrompt = configPrompts?.find(p => p.key === "instruction_extraction_analysis_prompt")?.value;
 
-INSTRUCTIONS FORMAT:
-- Each instruction must be a standalone "Rule of Thumb".
-- Format: "Always [do X]" or "Never [do Y]" or "When [scenario], ensure [Z]".
+    const finalSystemPrompt = dbSystemPrompt || "You are an expert Behavior Analyst for AI agents. You excel at spotting user preferences and AI behavioral mistakes even when they aren't explicitly stated as 'rules'.";
 
-Conversation History:
----
-${conversation}
----
-
-If you find even minor behavioral patterns or opportunities for improvement, extract them.
-Return a JSON object with an "instructions" array. If absolutely nothing is found, return an empty array.`;
+    // Construct analysis prompt using DB template or fallback
+    let finalAnalysisPrompt = "";
+    if (dbAnalysisPrompt) {
+        finalAnalysisPrompt = dbAnalysisPrompt.replace("{{CONVERSATION}}", conversation);
+    } else {
+        finalAnalysisPrompt = `Analyze the following conversation history.\n...\nConversation History:\n---\n${conversation}\n---\n...`;
+    }
 
     try {
         console.log("[Instructions] Sending cleaned conversation to AI analyzer...");
         const payload = {
-            messages: [{ role: "user", content: analysisPrompt }],
-            system_prompt: "You are an expert Behavior Analyst for AI agents. You excel at spotting user preferences and AI behavioral mistakes even when they aren't explicitly stated as 'rules'.",
+            messages: [{ role: "user", content: finalAnalysisPrompt }],
+            system_prompt: finalSystemPrompt,
             model: "openai:gpt-4o",
             structured_output_format: {
                 type: "object",

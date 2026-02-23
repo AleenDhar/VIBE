@@ -89,10 +89,48 @@ export async function updateBasePrompt(newPrompt: string) {
             updated_at: new Date().toISOString()
         });
 
-    if (error) {
-        console.error("Error updating prompt:", error);
-        return { success: false, error: error.message };
-    }
+    revalidatePath("/admin");
+    return { success: true };
+}
+
+// 2b. Extraction Prompts
+export async function getExtractionPrompts() {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) return { system: "", analysis: "" };
+
+    const supabase = await createClient();
+    const { data } = await supabase
+        .from("app_config")
+        .select("key, value")
+        .in("key", ["instruction_extraction_system_prompt", "instruction_extraction_analysis_prompt"]);
+
+    const prompts: Record<string, string> = { system: "", analysis: "" };
+    data?.forEach((row: any) => {
+        if (row.key === "instruction_extraction_system_prompt") prompts.system = row.value;
+        if (row.key === "instruction_extraction_analysis_prompt") prompts.analysis = row.value;
+    });
+
+    return prompts;
+}
+
+export async function updateExtractionPrompt(key: "system" | "analysis", value: string) {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) return { success: false, error: "Unauthorized" };
+
+    const configKey = key === "system"
+        ? "instruction_extraction_system_prompt"
+        : "instruction_extraction_analysis_prompt";
+
+    const supabase = await createClient();
+    const { error } = await supabase
+        .from("app_config")
+        .upsert({
+            key: configKey,
+            value,
+            updated_at: new Date().toISOString()
+        });
+
+    if (error) return { success: false, error: error.message };
 
     revalidatePath("/admin");
     return { success: true };
