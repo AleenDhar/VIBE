@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
 
 
     try {
-        const { projectId, chatId: rawChatId, content, previousMessages, model } = await req.json();
+        const { projectId, chatId: rawChatId, content, previousMessages, model, images } = await req.json();
 
         // Helper: Ensure valid UUID
         const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -179,9 +179,15 @@ export async function POST(req: NextRequest) {
         // 6. Build Payload
         const messagesPayload = previousMessages ? previousMessages.map((m: any) => ({
             role: m.role,
-            content: m.content
+            content: m.content,
+            ...(m.images && m.images.length > 0 ? { images: m.images } : {})
         })) : [];
-        messagesPayload.push({ role: "user", content });
+
+        const currentUserMsg: any = { role: "user", content };
+        if (images && images.length > 0) {
+            currentUserMsg.images = images;
+        }
+        messagesPayload.push(currentUserMsg);
 
         const payload = {
             messages: messagesPayload,

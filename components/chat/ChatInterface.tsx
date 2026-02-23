@@ -3,7 +3,7 @@
 import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -111,11 +111,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
     const [creatingNewChat, setCreatingNewChat] = useState(false);
+    const [pendingImages, setPendingImages] = useState<string[]>([]);
+    const [uploadingImage, setUploadingImage] = useState(false);
     const router = useRouter();
 
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
     const supabase = createClient();
 
@@ -439,11 +442,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     }, [chatId, realtimeStatus, messages, supabase]);
 
     const handleSend = async (messageContent: string = input) => {
-        if (!messageContent.trim()) return;
+        if (!messageContent.trim() && pendingImages.length === 0) return;
+
+        const imagesToSend = [...pendingImages];
+        setPendingImages([]);
 
         const tempId = crypto.randomUUID();
-        // Add created_at timestamp
-        const userMsg = { role: "user", content: messageContent, id: tempId, created_at: new Date().toISOString() };
+        // Add created_at timestamp and images
+        const userMsg = { role: "user", content: messageContent, id: tempId, created_at: new Date().toISOString(), images: imagesToSend };
         setMessages(prev => [...prev, userMsg]);
         setInput("");
         setLoading(true);
@@ -468,7 +474,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     projectId,
                     chatId,
                     content: messageContent,
-                    previousMessages: messages,
+                    images: imagesToSend.length > 0 ? imagesToSend : undefined,
+                    previousMessages: messages.map(m => ({
+                        role: m.role,
+                        content: m.content,
+                        images: m.images
+                    })),
                     model
                 })
             });
@@ -703,6 +714,38 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }
     };
 
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0) return;
+        setUploadingImage(true);
+        try {
+            const files = Array.from(e.target.files);
+            const urls = await Promise.all(files.map(async (file) => {
+                const filePath = `chat/${chatId}/img_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                const { error: uploadError } = await supabase.storage
+                    .from("project-files")
+                    .upload(filePath, file);
+
+                if (uploadError) throw uploadError;
+
+                const { data, error: signedUrlError } = await supabase.storage
+                    .from("project-files")
+                    .createSignedUrl(filePath, 60 * 60 * 24 * 365); // 1 year expiry
+
+                if (signedUrlError) throw signedUrlError;
+
+                return data?.signedUrl || '';
+            }));
+
+            setPendingImages(prev => [...prev, ...urls.filter(Boolean)]);
+        } catch (error: any) {
+            console.error("Image upload failed", error);
+            alert("Image upload failed: " + error.message);
+        } finally {
+            setUploadingImage(false);
+            if (imageInputRef.current) imageInputRef.current.value = "";
+        }
+    };
+
     // Initialize speech recognition
     useEffect(() => {
         if (typeof window !== 'undefined') {
@@ -832,21 +875,32 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                             )}
                             <div className={`flex flex-col gap-2 max-w-[85%] md:max-w-[80%] min-w-0 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                                 {msg.role === 'user' ? (
-                                    <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm md:text-base break-words shadow-sm">
-                                        <div className="whitespace-pre-wrap">
-                                            {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
-                                                const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
-                                                if (match) {
-                                                    return (
-                                                        <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1 bg-white/10 p-1 rounded">
-                                                            <FileIcon className="h-4 w-4" />
-                                                            {match[1]}
-                                                        </a>
-                                                    );
-                                                }
-                                                return part;
-                                            })}
-                                        </div>
+                                    <div className="flex flex-col gap-2 items-end">
+                                        {msg.images && msg.images.length > 0 && (
+                                            <div className="flex flex-wrap gap-2 justify-end mb-1">
+                                                {msg.images.map((url: string, idx: number) => (
+                                                    <img key={idx} src={url} alt="Uploaded content" className="w-[85%] md:w-full max-w-[280px] max-h-[220px] object-cover rounded-xl shadow-sm border border-border/20 bg-background" />
+                                                ))}
+                                            </div>
+                                        )}
+                                        {msg.content && (
+                                            <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm md:text-base break-words shadow-sm">
+                                                <div className="whitespace-pre-wrap">
+                                                    {msg.content.split(/(\[File Uploaded: .*?\]\(.*?\))/g).map((part: string, index: number) => {
+                                                        const match = part.match(/\[File Uploaded: (.*?)\]\((.*?)\)/);
+                                                        if (match) {
+                                                            return (
+                                                                <a key={index} href={match[2]} target="_blank" rel="noopener noreferrer" className="underline hover:opacity-80 flex items-center gap-1 bg-white/10 p-1 rounded">
+                                                                    <FileIcon className="h-4 w-4" />
+                                                                    {match[1]}
+                                                                </a>
+                                                            );
+                                                        }
+                                                        return part;
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (() => {
                                     const rawContent = msg.content || "";
@@ -1162,10 +1216,28 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             </div>
 
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
-                <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all">
+                <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all flex flex-col">
+
+                    {/* Pending Images Preview */}
+                    {pendingImages.length > 0 && (
+                        <div className="px-3 pt-3 flex gap-3 overflow-x-auto w-full">
+                            {pendingImages.map((url, idx) => (
+                                <div key={idx} className="relative group flex-shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                    <img src={url} alt="upload" className="h-20 w-20 md:h-24 md:w-24 object-cover rounded-xl border shadow-sm" />
+                                    <button
+                                        onClick={() => setPendingImages(prev => prev.filter((_, i) => i !== idx))}
+                                        className="absolute -top-2 -right-2 bg-background border shadow-sm text-muted-foreground hover:text-destructive rounded-full p-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                                    >
+                                        <X className="h-3 w-3" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     <textarea
-                        className="w-full bg-transparent border-none rounded-2xl pl-20 pr-32 py-3 md:py-4 text-sm md:text-base focus:outline-none resize-none min-h-[56px] max-h-[200px] overflow-y-auto"
-                        placeholder="Send a message to the model..."
+                        className={`w-full bg-transparent border-none rounded-2xl pl-[112px] pr-32 pb-3 pt-3 md:pb-4 md:pt-4 text-sm md:text-base focus:outline-none resize-none overflow-y-auto ${pendingImages.length > 0 ? "min-h-[44px]" : "min-h-[56px]"}`}
+                        placeholder={pendingImages.length > 0 ? "Add a message about these images..." : "Send a message to the model..."}
                         value={input}
                         onChange={(e) => {
                             setInput(e.target.value);
@@ -1182,19 +1254,27 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         rows={1}
                     />
 
-                    <div className="absolute bottom-3 left-2 flex gap-1">
+                    <div className="absolute bottom-2 left-2 flex gap-1">
                         <input
                             type="file"
                             ref={fileInputRef}
                             className="hidden"
                             onChange={handleFileUpload}
-                            accept=".pdf,.csv,.xls,.xlsx,.txt,image/*"
+                            accept=".pdf,.csv,.xls,.xlsx,.txt"
+                        />
+                        <input
+                            type="file"
+                            ref={imageInputRef}
+                            className="hidden"
+                            onChange={handleImageUpload}
+                            accept="image/png,image/jpeg,image/webp,image/gif"
+                            multiple
                         />
                         <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => fileInputRef.current?.click()}
-                            disabled={loading || uploading}
+                            disabled={loading || uploading || uploadingImage}
                             className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/50 rounded-lg"
                         >
                             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
@@ -1202,15 +1282,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         <Button
                             variant="ghost"
                             size="icon"
+                            onClick={() => imageInputRef.current?.click()}
+                            disabled={loading || uploading || uploadingImage}
+                            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/50 rounded-lg"
+                        >
+                            {uploadingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={toggleVoiceInput}
-                            disabled={loading}
+                            disabled={loading || uploading || uploadingImage}
                             className={`h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-background/50 rounded-lg ${isRecording ? "text-destructive" : ""}`}
                         >
                             {isRecording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                         </Button>
                     </div>
 
-                    <div className="absolute bottom-3 right-2 flex items-center gap-2">
+                    <div className="absolute bottom-2 right-2 flex items-center gap-2">
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground px-2">
@@ -1242,7 +1331,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         </DropdownMenu>
                         <Button
                             onClick={() => loading ? handleStop() : handleSend()}
-                            disabled={!loading && !input.trim()}
+                            disabled={(!loading && !input.trim() && pendingImages.length === 0)}
                             size="icon"
                             className={`h-8 w-8 rounded-lg transition-all ${loading
                                 ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
