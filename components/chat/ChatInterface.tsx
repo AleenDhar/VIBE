@@ -3,7 +3,7 @@
 import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Brain } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -13,6 +13,7 @@ import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
 import { addDocument } from "@/lib/actions/documents";
 import { exportToPDF, exportToDocx } from "@/lib/export-utils";
+import { extractBehavioralInstructions } from "@/lib/actions/instructions";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -215,6 +216,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
     const [creatingNewChat, setCreatingNewChat] = useState(false);
+    const [extractingMemory, setExtractingMemory] = useState(false);
     const router = useRouter();
 
     // Refs
@@ -238,6 +240,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             console.error("Error creating new chat:", e);
         } finally {
             setCreatingNewChat(false);
+        }
+    };
+
+    const handleExtractMemory = async () => {
+        if (!chatId || extractingMemory) return;
+        setExtractingMemory(true);
+        try {
+            const result = await extractBehavioralInstructions(chatId);
+            if (result.success) {
+                alert(`Successfully extracted ${result.count} behavioral instructions from this chat.`);
+            } else {
+                alert(`Extraction failed: ${result.error}`);
+            }
+        } catch (e) {
+            console.error("Error extracting memory:", e);
+            alert("An error occurred during memory extraction.");
+        } finally {
+            setExtractingMemory(false);
         }
     };
 
@@ -911,6 +931,25 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         )}
                         <span>{creatingNewChat ? "Creating..." : "New Chat"}</span>
                     </button>
+
+                    <button
+                        onClick={handleExtractMemory}
+                        disabled={extractingMemory || loading}
+                        className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ml-2
+                            bg-purple-500/10 text-purple-600 border border-purple-500/20
+                            hover:bg-purple-500 hover:text-white hover:border-purple-500
+                            hover:shadow-[0_0_16px_rgba(168,85,247,0.25)]
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            transition-all duration-200 ease-out"
+                        title="Extract and learn from this chat's behavior"
+                    >
+                        {extractingMemory ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <Brain className="h-3.5 w-3.5 transition-transform duration-300 group-hover:scale-110" />
+                        )}
+                        <span>{extractingMemory ? "Extracting..." : "Extract Memory"}</span>
+                    </button>
                 </div>
             )}
 
@@ -1082,7 +1121,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                                                     }
                                                                                 } catch {
                                                                                     // Handle Python-style list strings: [{'type': 'text', 'text': '...'}]
-                                                                                    const textMatches = [...raw.matchAll(/'text'\s*:\s*'((?:[^'\\]|\\.)*)'/g)];
+                                                                                    const textMatches = [...raw.matchAll(/'text'\s*:\s* '((?:[^'\\]|\\.)*)'/g)];
                                                                                     if (textMatches.length > 0) {
                                                                                         resultText = textMatches
                                                                                             .map((m: any) => m[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\'/g, "'").replace(/\\\\/g, '\\'))
