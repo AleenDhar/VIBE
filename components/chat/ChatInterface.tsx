@@ -3,7 +3,7 @@
 import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
 import { addDocument } from "@/lib/actions/documents";
+import { exportToPDF, exportToDocx } from "@/lib/export-utils";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -1008,7 +1009,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     });
 
                                     return (
-                                        <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed">
+                                        <div className="w-full text-foreground/90 text-sm md:text-base leading-relaxed" id={`message-content-${i}`}>
                                             {/* Render Mixed Thoughts & Toggles */}
                                             {msg.thinkingSteps && msg.thinkingSteps.length > 0 && (
                                                 <div className="flex flex-col gap-2 mb-4 w-full">
@@ -1213,6 +1214,30 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                     >
                                                         <RotateCcw className="h-4 w-4" />
                                                     </Button>
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg"
+                                                                title="Export Response"
+                                                            >
+                                                                <Download className="h-4 w-4" />
+                                                            </Button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="start">
+                                                            <DropdownMenuItem onClick={() => {
+                                                                if (displayContent) exportToPDF(displayContent, `chat-export-${i}.pdf`);
+                                                            }}>
+                                                                Export as PDF
+                                                            </DropdownMenuItem>
+                                                            <DropdownMenuItem onClick={() => {
+                                                                if (displayContent) exportToDocx(displayContent, `chat-export-${i}.doc`);
+                                                            }}>
+                                                                Export as Word
+                                                            </DropdownMenuItem>
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
                                                     <div className="flex-1" />
                                                     {(function () {
                                                         // Calculate time difference
