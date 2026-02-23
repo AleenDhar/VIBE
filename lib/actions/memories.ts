@@ -144,3 +144,43 @@ export async function deleteMemory(memoryId: string) {
 
     return { success: true };
 }
+
+export async function addManualMemory(projectId: string, data: {
+    content: string;
+    memory_type: 'insight' | 'preference' | 'behavioral' | 'issue' | 'solution' | 'feedback';
+    importance: number;
+    sentiment?: 'positive' | 'negative' | 'neutral' | 'rule';
+}) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { success: false, error: "Unauthorized" };
+
+    if (data.memory_type === 'behavioral') {
+        // Store in agent_instructions
+        const { error } = await supabase
+            .from("agent_instructions")
+            .insert({
+                project_id: projectId,
+                user_id: user.id,
+                instruction: data.content,
+                is_active: true
+            });
+        if (error) return { success: false, error: error.message };
+    } else {
+        // Store in project_memories
+        const { error } = await supabase
+            .from("project_memories")
+            .insert({
+                project_id: projectId,
+                user_id: user.id,
+                content: data.content,
+                memory_type: data.memory_type,
+                importance: data.importance,
+                sentiment: data.sentiment || 'neutral'
+            });
+        if (error) return { success: false, error: error.message };
+    }
+
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true };
+}
