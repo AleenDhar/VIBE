@@ -172,7 +172,6 @@ export async function addManualMemory(projectId: string, data: {
             .from("project_memories")
             .insert({
                 project_id: projectId,
-                user_id: user.id,
                 content: data.content,
                 memory_type: data.memory_type,
                 importance: data.importance,
