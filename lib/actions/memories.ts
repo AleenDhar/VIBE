@@ -125,14 +125,21 @@ export async function getProjectMemories(projectId: string, limit: number = 10) 
 export async function deleteMemory(memoryId: string) {
     const supabase = await createClient();
 
-    const { error } = await supabase
+    // Try deleting from project_memories first
+    const { error: memoryError } = await supabase
         .from("project_memories")
         .delete()
         .eq("id", memoryId);
 
-    if (error) {
-        console.error("Delete memory error:", error);
-        return { success: false, error: error.message };
+    // Also try deleting from agent_instructions (one will succeed, the other will just do nothing)
+    const { error: instructionError } = await supabase
+        .from("agent_instructions")
+        .delete()
+        .eq("id", memoryId);
+
+    if (memoryError && instructionError) {
+        console.error("Delete memory error:", { memoryError, instructionError });
+        return { success: false, error: "Failed to delete from both tables" };
     }
 
     return { success: true };

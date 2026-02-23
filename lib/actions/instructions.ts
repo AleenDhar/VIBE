@@ -11,19 +11,21 @@ export async function extractBehavioralInstructions(chatId: string) {
         return { success: false, error: "Unauthorized" };
     }
 
-    console.log(`[Instructions] Extracting from chat: ${chatId}`);
+    // Get chat messages and project_id in one go
+    const { data: chatData, error: chatError } = await supabase
+        .from("chats")
+        .select("project_id, chat_messages(role, content)")
+        .eq("id", chatId)
+        .order("created_at", { foreignTable: "chat_messages", ascending: true })
+        .single();
 
-    // Get chat messages
-    const { data: messages, error: messagesError } = await supabase
-        .from("chat_messages")
-        .select("role, content")
-        .eq("chat_id", chatId)
-        .order("created_at", { ascending: true });
-
-    if (messagesError) {
-        console.error("[Instructions] Error fetching messages:", messagesError);
-        return { success: false, error: messagesError.message };
+    if (chatError) {
+        console.error("[Instructions] Error fetching chat data:", chatError);
+        return { success: false, error: chatError.message };
     }
+
+    const messages = chatData?.chat_messages as any[];
+    const projectId = chatData?.project_id;
 
     if (!messages || messages.length === 0) {
         console.warn("[Instructions] No messages found for chat", chatId);
@@ -112,6 +114,7 @@ Return a JSON object with an "instructions" array. If absolutely nothing is foun
         const instructionsToInsert = instructions.map(inst => ({
             user_id: user.id,
             source_chat_id: chatId,
+            project_id: projectId,
             instruction: inst,
             is_active: true
         }));
