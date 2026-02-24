@@ -158,12 +158,22 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        // Get Agent Behavioral Instructions (Global for the user)
-        const { data: instructions } = await supabase
+        // Get Agent Behavioral Instructions (Global + Project Specific)
+        let instructionsQuery = supabase
             .from("agent_instructions")
             .select("instruction")
             .eq("user_id", user.id)
-            .eq("is_active", true)
+            .eq("is_active", true);
+
+        if (finalProjectId) {
+            // Fetch instructions specifically for this project OR those with no project (global)
+            instructionsQuery = instructionsQuery.or(`project_id.eq.${finalProjectId},project_id.is.null`);
+        } else {
+            // Global only
+            instructionsQuery = instructionsQuery.is("project_id", null);
+        }
+
+        const { data: instructions } = await instructionsQuery
             .order("created_at", { ascending: false });
 
         if (instructions && instructions.length > 0) {
