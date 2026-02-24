@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
-export async function proxy(request: NextRequest) {
+export async function middleware(request: NextRequest) {
     try {
         const { response, user } = await updateSession(request);
 
@@ -18,13 +18,13 @@ export async function proxy(request: NextRequest) {
             return redirectResponse;
         };
 
-        // Authenticated users visiting the landing page should go to chat
+        // Authenticated users visiting the landing page should go to projects
         if (user && request.nextUrl.pathname === "/") {
-            return createRedirect("/chat");
+            return createRedirect("/projects");
         }
 
         // Define protected routes (add/remove as needed)
-        const protectedRoutes = ["/chat", "/projects", "/admin"];
+        const protectedRoutes = ["/chat", "/projects", "/admin", "/omnivision", "/builder"];
 
         // Check if current path matches any protected route
         const isProtectedRoute = protectedRoutes.some(route =>

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/Button";
 import Link from "next/link";
 import { BarChart, Loader2 } from "lucide-react";
 import { LoginButton } from "@/components/auth/LoginButton";
+import { EmailAuth } from "@/components/auth/EmailAuth";
 import { useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
@@ -51,10 +52,19 @@ function HomeContent() {
           Accelerate your deal flow with AI-driven diagnostics, risk assessment, and detailed analytics.
         </p>
 
-        <div className="flex flex-col gap-4 w-full max-w-xs pt-4">
+        <div className="flex flex-col gap-4 w-full max-w-sm pt-4">
           <LoginButton />
 
+          <div className="relative py-4">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border/50"></span>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">Or continue with email</span>
+            </div>
+          </div>
 
+          <EmailAuth />
         </div>
 
         <p className="text-xs text-muted-foreground pt-8">
