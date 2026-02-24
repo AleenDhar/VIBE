@@ -95,7 +95,8 @@ export async function POST(req: NextRequest) {
         const { error: insertError } = await supabase.from("chat_messages").insert({
             chat_id: chatId,
             role: "user",
-            content: content
+            content: content,
+            metadata: images && images.length > 0 ? { images } : {}
         });
 
         if (insertError) {

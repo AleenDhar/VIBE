@@ -108,9 +108,10 @@ interface ChatProps {
     initialMessages: any[];
     initialInput?: string;
     initialModel?: string;
+    initialImages?: string[];
 }
 
-export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel }: ChatProps) {
+export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages }: ChatProps) {
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
@@ -134,7 +135,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         // ─────────────────────────────────────────────────────────────────
 
         if (msg.role === 'user') {
-            acc.push({ ...msg });
+            acc.push({ ...msg, images: meta.images || msg.images || [] });
         } else if (msg.role === 'assistant') {
             const lastMsg = acc[acc.length - 1];
 
@@ -216,7 +217,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
     const [creatingNewChat, setCreatingNewChat] = useState(false);
-    const [pendingImages, setPendingImages] = useState<string[]>([]);
+    const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const router = useRouter();
@@ -271,6 +272,19 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }
     }, [messages, loading]);
 
+    // Sync initial images and model if they are provided later (e.g. from StandaloneChatClient)
+    useEffect(() => {
+        if (initialImages && initialImages.length > 0 && pendingImages.length === 0) {
+            setPendingImages(initialImages);
+        }
+    }, [initialImages]);
+
+    useEffect(() => {
+        if (initialModel && model !== initialModel) {
+            setModel(initialModel);
+        }
+    }, [initialModel]);
+
     // Check if there's a pending message on initial load yes
     useEffect(() => {
         // Find the last user message
@@ -308,9 +322,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     useEffect(() => {
         if (initialInput && !initialInputSentRef.current && initialMessages.length === 0) {
             initialInputSentRef.current = true;
-            handleSend(initialInput);
+            // Sync states for UI consistency
+            if (initialModel) setModel(initialModel);
+            if (initialImages && initialImages.length > 0) setPendingImages(initialImages);
+
+            // Send with explicit overrides because state updates are async
+            handleSend(initialInput, initialImages, initialModel);
         }
-    }, [initialInput]);
+    }, [initialInput, initialImages, initialModel, initialMessages.length]);
 
     // Realtime Subscription
     useEffect(() => {
@@ -570,10 +589,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         };
     }, [chatId, realtimeStatus, messages, supabase]);
 
-    const handleSend = async (messageContent: string = input) => {
-        if (!messageContent.trim() && pendingImages.length === 0) return;
+    const handleSend = async (
+        messageContent: string = input,
+        overrideImages?: string[],
+        overrideModel?: string
+    ) => {
+        if (!messageContent.trim() && (overrideImages?.length || pendingImages.length) === 0) return;
 
-        const imagesToSend = [...pendingImages];
+        const imagesToSend = overrideImages || [...pendingImages];
         setPendingImages([]);
 
         const tempId = crypto.randomUUID();
@@ -609,7 +632,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         content: m.content,
                         images: m.images
                     })),
-                    model
+                    model: overrideModel || model
                 })
             });
 

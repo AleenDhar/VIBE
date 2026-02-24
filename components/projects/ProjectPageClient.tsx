@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X } from "lucide-react";
 import Link from "next/link";
 import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
@@ -56,6 +56,48 @@ export function ProjectPageClient({
     const [inputValue, setInputValue] = useState("");
     const [selectedModel, setSelectedModel] = useState(MODELS[0]);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
+    const [pendingImages, setPendingImages] = useState<string[]>([]);
+    const [uploadingImage, setUploadingImage] = useState(false);
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files || e.target.files.length === 0) return;
+        const files = Array.from(e.target.files);
+        setUploadingImage(true);
+
+        try {
+            const urls = await Promise.all(
+                files.map(async (file) => {
+                    const filePath = `chat/temp_${project.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.\-]/g, '')}`;
+                    const { error: uploadError } = await supabase.storage
+                        .from('project-files')
+                        .upload(filePath, file);
+                    if (uploadError) throw uploadError;
+
+                    const { data, error: signedUrlError } = await supabase.storage
+                        .from('project-files')
+                        .createSignedUrl(filePath, 60 * 60 * 24 * 365 * 10);
+                    if (signedUrlError || !data?.signedUrl) throw signedUrlError;
+
+                    return data.signedUrl;
+                })
+            );
+
+            setPendingImages(prev => [...prev, ...urls]);
+        } catch (error) {
+            console.error("Error uploading image:", error);
+            alert("Failed to upload image. Please try again.");
+        } finally {
+            setUploadingImage(false);
+            if (imageInputRef.current) {
+                imageInputRef.current.value = "";
+            }
+        }
+    };
+
+    const handleRemoveImage = (index: number) => {
+        setPendingImages(prev => prev.filter((_, i) => i !== index));
+    };
 
     // Removed useEffect for loading messages
 
@@ -69,6 +111,9 @@ export function ProjectPageClient({
                 if (initialMessage) {
                     sessionStorage.setItem(`chat_initial_${result.id}`, initialMessage);
                 }
+                if (pendingImages.length > 0) {
+                    sessionStorage.setItem(`chat_initial_images_${result.id}`, JSON.stringify(pendingImages));
+                }
                 sessionStorage.setItem(`chat_model_${result.id}`, selectedModel.id);
                 router.push(`/projects/${project.id}/chat/${result.id}`);
             }
@@ -79,7 +124,7 @@ export function ProjectPageClient({
 
     const handleSubmitNewChat = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!inputValue.trim()) return;
+        if (!inputValue.trim() && pendingImages.length === 0) return;
         const msg = inputValue;
         // create chat and redirect
         // For passing the initial message, we might need to handle it differently if we redirect immediately.
@@ -144,9 +189,25 @@ export function ProjectPageClient({
                         <form onSubmit={handleSubmitNewChat} className="w-full">
                             <div className="relative group cursor-text">
                                 <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent rounded-3xl -z-10 opacity-50" />
-                                <div className="flex flex-col justify-between h-40 w-full rounded-3xl border bg-card/50 backdrop-blur-sm p-4 shadow-sm transition-all hover:border-primary/50 hover:shadow-md">
+                                <div className="flex flex-col justify-between w-full rounded-3xl border bg-card/50 backdrop-blur-sm p-4 shadow-sm transition-all hover:border-primary/50 hover:shadow-md">
+                                    {pendingImages.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 mb-2 px-2">
+                                            {pendingImages.map((url, i) => (
+                                                <div key={i} className="relative group/img">
+                                                    <img src={url} alt="Attached" className="h-16 w-16 object-cover rounded-xl border border-border" />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveImage(i)}
+                                                        className="absolute -top-2 -right-2 bg-background border border-border rounded-full p-1 shadow-sm opacity-0 group-hover/img:opacity-100 transition-opacity hover:bg-destructive hover:text-destructive-foreground"
+                                                    >
+                                                        <X className="h-3 w-3" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                     <textarea
-                                        className="w-full bg-transparent border-none resize-none p-2 text-lg placeholder:text-muted-foreground/70 focus:outline-none focus:ring-0"
+                                        className={`w-full bg-transparent border-none resize-none p-2 text-lg placeholder:text-muted-foreground/70 focus:outline-none focus:ring-0 ${pendingImages.length > 0 ? "min-h-[64px]" : "min-h-[80px]"}`}
                                         placeholder="Start a new chat..."
                                         value={inputValue}
                                         onChange={(e) => setInputValue(e.target.value)}
@@ -163,8 +224,16 @@ export function ProjectPageClient({
                                                 ref={fileInputRef}
                                                 type="file"
                                                 className="hidden"
-                                                accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.json,.md,image/*"
+                                                accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.json,.md"
                                                 multiple
+                                            />
+                                            <input
+                                                ref={imageInputRef}
+                                                type="file"
+                                                className="hidden"
+                                                accept="image/*"
+                                                multiple
+                                                onChange={handleImageUpload}
                                             />
                                             <Button
                                                 variant="ghost"
@@ -172,8 +241,26 @@ export function ProjectPageClient({
                                                 type="button"
                                                 className="text-muted-foreground hover:text-foreground"
                                                 onClick={() => fileInputRef.current?.click()}
+                                                title="Attach Document"
                                             >
                                                 <Paperclip className="h-5 w-5" />
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                type="button"
+                                                className="text-muted-foreground hover:text-foreground relative"
+                                                onClick={() => imageInputRef.current?.click()}
+                                                disabled={uploadingImage}
+                                                title="Attach Image"
+                                            >
+                                                <ImageIcon className={`h-5 w-5 ${uploadingImage ? "opacity-50" : ""}`} />
+                                                {uploadingImage && (
+                                                    <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                                                        <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+                                                    </span>
+                                                )}
                                             </Button>
                                         </div>
                                         <div className="flex items-center gap-2">
@@ -205,7 +292,7 @@ export function ProjectPageClient({
                                                 type="submit"
                                                 size="icon"
                                                 className="rounded-full h-10 w-10 bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-                                                disabled={!inputValue.trim()}
+                                                disabled={(!inputValue.trim() && pendingImages.length === 0) || uploadingImage}
                                             >
                                                 <ArrowUp className="h-5 w-5" />
                                             </Button>

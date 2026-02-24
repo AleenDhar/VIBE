@@ -95,10 +95,14 @@ export function Header({ onMenuClick }: HeaderProps) {
                         href={`/projects/${params.id}`}
                         className="hover:text-primary transition-colors cursor-pointer"
                     >
-                        <h1 className="text-lg font-semibold truncate max-w-[200px] md:max-w-[600px]">{title}</h1>
+                        <h1 className="text-lg font-semibold text-foreground truncate max-w-[200px] md:max-w-[600px]">
+                            {title}
+                        </h1>
                     </Link>
                 ) : (
-                    <h1 className="text-lg font-semibold text-foreground truncate max-w-[200px] md:max-w-[600px]">{title}</h1>
+                    <h1 className="text-lg font-semibold text-foreground truncate max-w-[200px] md:max-w-[600px]">
+                        {title}
+                    </h1>
                 )}
             </div>
 

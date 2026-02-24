@@ -12,6 +12,7 @@ interface StandaloneChatClientProps {
 export function StandaloneChatClient({ projectId, chatId, initialMessages }: StandaloneChatClientProps) {
     const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
     const [initialModel, setInitialModel] = useState<string | undefined>(undefined);
+    const [initialImages, setInitialImages] = useState<string[] | undefined>(undefined);
     const checkedRef = useRef(false);
 
     useEffect(() => {
@@ -21,8 +22,10 @@ export function StandaloneChatClient({ projectId, chatId, initialMessages }: Sta
         // Check if there's a pending initial message from the chat home page
         const msgKey = `chat_initial_${chatId}`;
         const modelKey = `chat_model_${chatId}`;
+        const imagesKey = `chat_initial_images_${chatId}`;
         const stored = sessionStorage.getItem(msgKey);
         const storedModel = sessionStorage.getItem(modelKey);
+        const storedImages = sessionStorage.getItem(imagesKey);
 
         if (stored) {
             setInitialInput(stored);
@@ -31,6 +34,14 @@ export function StandaloneChatClient({ projectId, chatId, initialMessages }: Sta
         if (storedModel) {
             setInitialModel(storedModel);
             sessionStorage.removeItem(modelKey);
+        }
+        if (storedImages) {
+            try {
+                setInitialImages(JSON.parse(storedImages));
+            } catch (e) {
+                console.error("Failed to parse initial images", e);
+            }
+            sessionStorage.removeItem(imagesKey);
         }
     }, [chatId]);
 
@@ -41,6 +52,7 @@ export function StandaloneChatClient({ projectId, chatId, initialMessages }: Sta
             initialMessages={initialMessages}
             initialInput={initialInput}
             initialModel={initialModel}
+            initialImages={initialImages}
         />
     );
 }
