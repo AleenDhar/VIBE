@@ -218,6 +218,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);
+    const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const router = useRouter();
@@ -594,14 +595,23 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         overrideImages?: string[],
         overrideModel?: string
     ) => {
-        if (!messageContent.trim() && (overrideImages?.length || pendingImages.length) === 0) return;
+        if (!messageContent.trim() && (overrideImages?.length || pendingImages.length) === 0 && pendingDocuments.length === 0) return;
 
         const imagesToSend = overrideImages || [...pendingImages];
         setPendingImages([]);
 
+        let finalMessageContent = messageContent;
+        if (pendingDocuments.length > 0) {
+            const docMessages = pendingDocuments.map(doc =>
+                `[File Uploaded: ${doc.name}](${doc.url})${doc.extractedContent ? "\n\n*File content has been indexed and added to chat context.*" : ""}`
+            ).join('\n\n');
+            finalMessageContent = docMessages + (finalMessageContent ? '\n\n' + finalMessageContent : '');
+            setPendingDocuments([]);
+        }
+
         const tempId = crypto.randomUUID();
         // Add created_at timestamp and images
-        const userMsg = { role: "user", content: messageContent, id: tempId, created_at: new Date().toISOString(), images: imagesToSend };
+        const userMsg = { role: "user", content: finalMessageContent, id: tempId, created_at: new Date().toISOString(), images: imagesToSend };
         setMessages(prev => [...prev, userMsg]);
         setInput("");
         setLoading(true);
@@ -625,7 +635,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 body: JSON.stringify({
                     projectId,
                     chatId,
-                    content: messageContent,
+                    content: finalMessageContent,
                     images: imagesToSend.length > 0 ? imagesToSend : undefined,
                     previousMessages: messages.map(m => ({
                         role: m.role,
@@ -857,6 +867,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         if (files.length === 0) return;
         setUploading(true);
         try {
+            const newDocs: { name: string, url: string, extractedContent: string }[] = [];
             for (const file of files) {
                 const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
 
@@ -884,9 +895,13 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     .from("project-files")
                     .getPublicUrl(filePath);
 
-                const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})${extractedContent ? "\n\n*File content has been indexed and added to chat context.*" : ""}`;
-                await handleSend(fileMessage);
+                newDocs.push({
+                    name: file.name,
+                    url: publicUrl,
+                    extractedContent: extractedContent
+                });
             }
+            setPendingDocuments(prev => [...prev, ...newDocs]);
         } catch (error: any) {
             console.error("Upload failed", error);
             alert("Upload failed: " + error.message);
@@ -1444,9 +1459,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
                 <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all flex flex-col">
 
-                    {/* Pending Images Preview */}
-                    {pendingImages.length > 0 && (
-                        <div className="px-3 pt-3 flex gap-3 overflow-x-auto w-full">
+                    {/* Pending Images & Files Preview */}
+                    {(pendingImages.length > 0 || pendingDocuments.length > 0) && (
+                        <div className="px-3 pt-3 pb-1 flex gap-3 overflow-x-auto w-full items-start">
                             {pendingImages.map((url, idx) => (
                                 <div key={idx} className="relative group flex-shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
                                     <img src={url} alt="upload" className="h-20 w-20 md:h-24 md:w-24 object-cover rounded-xl border shadow-sm" />
@@ -1458,12 +1473,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     </button>
                                 </div>
                             ))}
+                            {pendingDocuments.map((doc, idx) => (
+                                <div key={`doc-${idx}`} className="relative group flex-shrink-0 animate-in fade-in slide-in-from-bottom-2 duration-300 bg-background/50 border border-border/50 rounded-xl shadow-sm p-3 w-36 h-20 md:h-24 md:w-40 flex flex-col items-center justify-center text-center">
+                                    <FileIcon className="h-6 w-6 md:h-8 md:w-8 text-primary/70 mb-1 md:mb-2" />
+                                    <span className="text-[10px] md:text-xs font-medium text-foreground truncate w-full" title={doc.name}>{doc.name}</span>
+                                    <button
+                                        onClick={() => setPendingDocuments(prev => prev.filter((_, i) => i !== idx))}
+                                        className="absolute -top-2 -right-2 bg-background border shadow-sm text-muted-foreground hover:text-destructive rounded-full p-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                                    >
+                                        <X className="h-3 w-3" />
+                                    </button>
+                                </div>
+                            ))}
                         </div>
                     )}
 
                     <textarea
-                        className={`w-full bg-transparent border-none rounded-2xl pl-[112px] pr-32 pb-3 pt-3 md:pb-4 md:pt-4 text-sm md:text-base focus:outline-none resize-none overflow-y-auto ${pendingImages.length > 0 ? "min-h-[44px]" : "min-h-[56px]"}`}
-                        placeholder={pendingImages.length > 0 ? "Add a message about these images..." : "Send a message to the model..."}
+                        className={`w-full bg-transparent border-none rounded-2xl pl-[112px] pr-32 pb-3 pt-3 md:pb-4 md:pt-4 text-sm md:text-base focus:outline-none resize-none overflow-y-auto ${(pendingImages.length > 0 || pendingDocuments.length > 0) ? "min-h-[44px]" : "min-h-[56px]"}`}
+                        placeholder={(pendingImages.length > 0 || pendingDocuments.length > 0) ? "Add a message about these attachments..." : "Send a message to the model..."}
                         value={input}
                         onPaste={handlePaste}
                         onChange={(e) => {
