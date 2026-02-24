@@ -822,55 +822,10 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }
     };
 
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files || e.target.files.length === 0) return;
-
-        const file = e.target.files[0];
-        setUploading(true);
-        const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
-
-        try {
-            // 1. Upload to Storage
-            const { error: uploadError } = await supabase.storage
-                .from("project-files")
-                .upload(filePath, file);
-
-            if (uploadError) throw uploadError;
-
-            // 2. Extract content (client-side)
-            let extractedContent = "";
-            try {
-                extractedContent = await extractFileContent(file);
-            } catch (extractError) {
-                console.warn("Content extraction failed for chat upload:", extractError);
-            }
-
-            // 3. If in a project, save to documents table so it's injected into system prompt
-            if (projectId) {
-                await addDocument(projectId, file.name, filePath, extractedContent || undefined);
-            }
-
-            const { data: { publicUrl } } = supabase.storage
-                .from("project-files")
-                .getPublicUrl(filePath);
-
-            const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})${extractedContent ? "\n\n*File content has been indexed and added to chat context.*" : ""}`;
-            await handleSend(fileMessage);
-
-        } catch (error: any) {
-            console.error("Upload failed", error);
-            alert("Upload failed: " + error.message);
-        } finally {
-            setUploading(false);
-            if (fileInputRef.current) fileInputRef.current.value = "";
-        }
-    };
-
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files || e.target.files.length === 0) return;
+    const processImageFiles = async (files: File[]) => {
+        if (files.length === 0) return;
         setUploadingImage(true);
         try {
-            const files = Array.from(e.target.files);
             const urls = await Promise.all(files.map(async (file) => {
                 const filePath = `chat/${chatId}/img_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
                 const { error: uploadError } = await supabase.storage
@@ -897,6 +852,84 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             if (imageInputRef.current) imageInputRef.current.value = "";
         }
     };
+
+    const processDocuments = async (files: File[]) => {
+        if (files.length === 0) return;
+        setUploading(true);
+        try {
+            for (const file of files) {
+                const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
+
+                // 1. Upload to Storage
+                const { error: uploadError } = await supabase.storage
+                    .from("project-files")
+                    .upload(filePath, file);
+
+                if (uploadError) throw uploadError;
+
+                // 2. Extract content (client-side)
+                let extractedContent = "";
+                try {
+                    extractedContent = await extractFileContent(file);
+                } catch (extractError) {
+                    console.warn("Content extraction failed for chat upload:", extractError);
+                }
+
+                // 3. If in a project, save to documents table so it's injected into system prompt
+                if (projectId) {
+                    await addDocument(projectId, file.name, filePath, extractedContent || undefined);
+                }
+
+                const { data: { publicUrl } } = supabase.storage
+                    .from("project-files")
+                    .getPublicUrl(filePath);
+
+                const fileMessage = `[File Uploaded: ${file.name}](${publicUrl})${extractedContent ? "\n\n*File content has been indexed and added to chat context.*" : ""}`;
+                await handleSend(fileMessage);
+            }
+        } catch (error: any) {
+            console.error("Upload failed", error);
+            alert("Upload failed: " + error.message);
+        } finally {
+            setUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+        }
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files) return;
+        await processDocuments(Array.from(e.target.files));
+    };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files) return;
+        await processImageFiles(Array.from(e.target.files));
+    };
+
+    const handlePaste = async (e: React.ClipboardEvent) => {
+        const items = e.clipboardData.items;
+        const imageFiles: File[] = [];
+        const docFiles: File[] = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.type.indexOf("image") !== -1) {
+                const file = item.getAsFile();
+                if (file) imageFiles.push(file);
+            } else if (item.kind === "file") {
+                const file = item.getAsFile();
+                if (file) docFiles.push(file);
+            }
+        }
+
+        if (imageFiles.length > 0) {
+            await processImageFiles(imageFiles);
+        }
+        if (docFiles.length > 0) {
+            await processDocuments(docFiles);
+        }
+    };
+
 
     // Initialize speech recognition
     useEffect(() => {
@@ -1432,6 +1465,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         className={`w-full bg-transparent border-none rounded-2xl pl-[112px] pr-32 pb-3 pt-3 md:pb-4 md:pt-4 text-sm md:text-base focus:outline-none resize-none overflow-y-auto ${pendingImages.length > 0 ? "min-h-[44px]" : "min-h-[56px]"}`}
                         placeholder={pendingImages.length > 0 ? "Add a message about these images..." : "Send a message to the model..."}
                         value={input}
+                        onPaste={handlePaste}
                         onChange={(e) => {
                             setInput(e.target.value);
                             e.target.style.height = 'auto';
