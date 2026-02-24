@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import Link from "next/link";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus, Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,18 @@ export default async function ProjectsPage() {
     const { data: { user } } = await supabase.auth.getUser();
 
     let projects = [];
+    let isAdmin = false;
+
     if (user) {
+        // Fetch user profile to check role
+        const { data: profile } = await supabase
+            .from("profiles")
+            .select("role")
+            .eq("id", user.id)
+            .single();
+
+        isAdmin = profile?.role === 'admin' || profile?.role === 'super_admin';
+
         const { data } = await supabase
             .from("projects")
             .select("*")
@@ -31,6 +42,11 @@ export default async function ProjectsPage() {
                         {project.visibility === 'public' && (
                             <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full whitespace-nowrap ml-2">
                                 Public
+                            </span>
+                        )}
+                        {project.owner_id !== user?.id && (
+                            <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-0.5 rounded-full whitespace-nowrap ml-2">
+                                Shared
                             </span>
                         )}
                     </div>
@@ -59,12 +75,14 @@ export default async function ProjectsPage() {
                     <h1 className="text-3xl font-bold tracking-tight">Projects</h1>
                     <p className="text-muted-foreground mt-1">Manage your deals and explore public insights.</p>
                 </div>
-                <Button asChild>
-                    <Link href="/projects/new">
-                        <FolderPlus className="mr-2 h-4 w-4" />
-                        New Project
-                    </Link>
-                </Button>
+                {isAdmin && (
+                    <Button asChild>
+                        <Link href="/projects/new">
+                            <FolderPlus className="mr-2 h-4 w-4" />
+                            New Project
+                        </Link>
+                    </Button>
+                )}
             </div>
 
             <div className="space-y-6">
@@ -76,9 +94,11 @@ export default async function ProjectsPage() {
                     {myProjects.length === 0 ? (
                         <div className="col-span-full py-12 text-center border rounded-xl bg-muted/20 border-dashed">
                             <p className="text-muted-foreground">You haven't created any projects yet.</p>
-                            <Button variant="link" asChild className="mt-2">
-                                <Link href="/projects/new">Create one now</Link>
-                            </Button>
+                            {isAdmin && (
+                                <Button variant="link" asChild className="mt-2">
+                                    <Link href="/projects/new">Create one now</Link>
+                                </Button>
+                            )}
                         </div>
                     ) : (
                         myProjects.map((project: any) => (
@@ -90,13 +110,13 @@ export default async function ProjectsPage() {
 
             <div className="space-y-6">
                 <h2 className="text-xl font-semibold flex items-center gap-2 border-t pt-8">
-                    <FolderPlus className="h-5 w-5 text-secondary-foreground" />
-                    Discover Public Projects
+                    <Users className="h-5 w-5 text-secondary-foreground" />
+                    Shared With Me
                 </h2>
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                     {sharedProjects.length === 0 ? (
                         <div className="col-span-full py-8 text-center text-muted-foreground text-sm italic">
-                            No public projects available to explore right now.
+                            No projects have been shared with you yet.
                         </div>
                     ) : (
                         sharedProjects.map((project: any) => (
@@ -108,3 +128,4 @@ export default async function ProjectsPage() {
         </div>
     );
 }
+

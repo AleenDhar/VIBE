@@ -22,9 +22,18 @@ export async function GET(request: Request) {
             } else {
                 return NextResponse.redirect(`${origin}${next}`)
             }
+        } else {
+            console.error("Auth callback error:", error.message);
+            return NextResponse.json({ error: "Auth callback error", details: error.message }, { status: 400 });
         }
+    } else {
+        console.error("Auth callback error: No code provided in URL search params.");
     }
 
     // return the user to an error page with instructions
-    return NextResponse.redirect(`${origin}/auth/auth-code-error`)
+    return NextResponse.json({
+        error: "Missing auth code in URL.",
+        url: request.url,
+        message: "Supabase sent you here, but without a PKCE code. If you are using implicit flow, please enable PKCE or check your email templates."
+    }, { status: 400 });
 }
