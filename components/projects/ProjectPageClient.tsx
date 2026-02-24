@@ -9,6 +9,7 @@ import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
 import { MemoryManager } from "@/components/projects/MemoryManager";
 import { VisibilityToggle } from "@/components/projects/VisibilityToggle";
+import { ProjectAccessManager } from "@/components/projects/ProjectAccessManager";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { createClient } from "@/lib/supabase/client";
 import { extractFileContent } from "@/lib/extract-file-content";
@@ -256,6 +257,10 @@ export function ProjectPageClient({
                                 <VisibilityToggle
                                     projectId={project.id}
                                     initialVisibility={project.visibility || 'private'}
+                                    canEdit={isOwner}
+                                />
+                                <ProjectAccessManager
+                                    projectId={project.id}
                                     canEdit={isOwner}
                                 />
                             </div>

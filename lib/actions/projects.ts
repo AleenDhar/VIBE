@@ -12,6 +12,16 @@ export async function createProject(formData: FormData) {
         redirect("/");
     }
 
+    const { data: profile } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+
+    if (!profile || !['admin', 'super_admin'].includes(profile.role)) {
+        redirect("/projects");
+    }
+
     const name = formData.get("name") as string;
     const description = formData.get("description") as string;
     const systemPrompt = formData.get("system_prompt") as string;
