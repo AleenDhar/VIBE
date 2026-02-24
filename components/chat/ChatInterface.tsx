@@ -1488,6 +1488,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                             className="hidden"
                             onChange={handleFileUpload}
                             accept=".pdf,.csv,.xls,.xlsx,.txt"
+                            multiple
                         />
                         <input
                             type="file"
