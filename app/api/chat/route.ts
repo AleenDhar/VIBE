@@ -1,6 +1,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { generateEmbeddings } from "@/lib/rag-utils";
 
 export const dynamic = 'force-dynamic';
 
@@ -114,47 +115,85 @@ export async function POST(req: NextRequest) {
 
         let systemPrompt = basePrompt;
 
+        // 5. Get API Keys & Agent URL (we need them regardless of project_id, moved to top)
+        const { data: configData } = await supabase
+            .from("app_config")
+            .select("key, value")
+            .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
+
+        const apiKeys: Record<string, string> = {};
+        let agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app/api/chat/";
+
+        if (configData) {
+            configData.forEach((row: any) => {
+                if (row.key === "agent_api_url" && row.value) {
+                    agentApiUrl = row.value;
+                } else if (row.value) {
+                    apiKeys[row.key] = row.value;
+                }
+            });
+        }
+
         // 3. Get Project System Prompt & Memories (only if chat belongs to a project)
         if (finalProjectId) {
-            const { data: project } = await supabase
-                .from("projects")
-                .select("system_prompt")
-                .eq("id", finalProjectId)
-                .single();
-            systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
+            // 4b. Get Project Documents via Vector Search (RAG)
+            try {
+                const { data: project } = await supabase
+                    .from("projects")
+                    .select("system_prompt")
+                    .eq("id", finalProjectId)
+                    .single();
+                systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
 
-            // 4. Get Project Memories
-            const { data: memories } = await supabase
-                .from("project_memories")
-                .select("memory_type, content, sentiment, importance")
-                .eq("project_id", finalProjectId)
-                .order("importance", { ascending: false })
-                .limit(10);
+                // 4. Get Project Memories
+                const { data: memories } = await supabase
+                    .from("project_memories")
+                    .select("memory_type, content, sentiment, importance")
+                    .eq("project_id", finalProjectId)
+                    .order("importance", { ascending: false })
+                    .limit(10);
 
-            if (memories && memories.length > 0) {
-                const memoryContext = memories.map(m =>
-                    `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
-                ).join("\n");
-                systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
-            }
-            // 4b. Get Project Documents
-            const { data: documents } = await supabase
-                .from("documents")
-                .select("name, content, file_path")
-                .eq("project_id", finalProjectId);
-
-            if (documents && documents.length > 0) {
-                const docsContext = documents
-                    .filter(d => d.content) // Only include docs with extracted content
-                    .map(d => `--- File: ${d.name} ---\n${d.content}\n--- End of File: ${d.name} ---`)
-                    .join("\n\n");
-
-                if (docsContext) {
-                    systemPrompt += `\n\n## Attached Project Files\nThe following files have been attached to this project. You have full access to their contents. Always refer to these contents if the user asks about them:\n\n${docsContext}`;
-                } else {
-                    const docNames = documents.map(d => d.name).join(", ");
-                    systemPrompt += `\n\n## Attached Project Files\nThe following files are attached to this project but their text content could not be extracted: ${docNames}.`;
+                if (memories && memories.length > 0) {
+                    const memoryContext = memories.map(m =>
+                        `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
+                    ).join("\n");
+                    systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
                 }
+
+                // Generate an embedding for the user's latest message
+                const queryEmbedding = await generateEmbeddings([content], apiKeys["openai_api_key"]);
+
+                if (queryEmbedding && queryEmbedding.length > 0) {
+                    // Call Supabase RPC function to get relevant chunks
+                    const { data: relevantChunks, error: rpcError } = await supabase.rpc(
+                        "match_document_chunks",
+                        {
+                            query_embedding: queryEmbedding[0],
+                            match_project_id: finalProjectId,
+                            match_threshold: 0.3, // Lower bound similarity (0.0 to 1.0)
+                            match_count: 5        // Max number of chunks to inject
+                        }
+                    );
+
+                    if (rpcError) throw rpcError;
+
+                    if (relevantChunks && relevantChunks.length > 0) {
+                        const docsContext = relevantChunks
+                            .map((chunk: any) => `[Excerpt]:\n${chunk.content}`)
+                            .join("\n\n---\n\n");
+
+                        systemPrompt += `\n\n## Relevant Document Excerpts\nBased on the user's latest message, here are the most relevant excerpts from the project's attached files. Use these to answer the user's questions definitively:\n\n${docsContext}`;
+                    } else {
+                        // Let the agent know files exist but nothing specific matched
+                        const { data: docsCount } = await supabase.from("documents").select("id", { count: "exact" }).eq("project_id", finalProjectId);
+                        if (docsCount && docsCount.length > 0) {
+                            systemPrompt += `\n\n## Attached Project Files\nThere are ${docsCount.length} files attached to this project, but no highly relevant excerpts matched the user's current query.`;
+                        }
+                    }
+                }
+            } catch (ragError) {
+                console.error("RAG Document Search Failed:", ragError);
+                // Fallback or just ignore error and continue without docs
             }
         }
 
@@ -181,24 +220,7 @@ export async function POST(req: NextRequest) {
             systemPrompt += `\n\n## Behavioral Instructions\nThe following are specific instructions and behavioral rules you MUST follow in this conversation, based on previous interactions:\n${instructionsContext}`;
         }
 
-        // 5. Get API Keys & Agent URL
-        const { data: configData } = await supabase
-            .from("app_config")
-            .select("key, value")
-            .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
-
-        const apiKeys: Record<string, string> = {};
-        let agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app/api/chat/";
-
-        if (configData) {
-            configData.forEach((row: any) => {
-                if (row.key === "agent_api_url" && row.value) {
-                    agentApiUrl = row.value;
-                } else if (row.value) {
-                    apiKeys[row.key] = row.value;
-                }
-            });
-        }
+        // API keys fetching has been moved up to support RAG in the project block
 
         // 6. Build Payload
         const messagesPayload = previousMessages ? previousMessages.map((m: any) => ({
