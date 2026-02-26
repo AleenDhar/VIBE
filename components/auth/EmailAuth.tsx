@@ -12,7 +12,7 @@ export function EmailAuth() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [isLoading, setIsLoading] = useState(false);
-    const [mode, setMode] = useState<"signin" | "signup">("signin");
+    const [mode, setMode] = useState<"signin" | "signup" | "reset">("signin");
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const router = useRouter();
@@ -25,7 +25,13 @@ export function EmailAuth() {
         setMessage(null);
 
         try {
-            if (mode === "signup") {
+            if (mode === "reset") {
+                const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+                    redirectTo: `${window.location.origin}/auth/callback?next=/auth/update-password`,
+                });
+                if (resetError) throw resetError;
+                setMessage("Check your email for the password reset link.");
+            } else if (mode === "signup") {
                 const { error: signUpError } = await supabase.auth.signUp({
                     email,
                     password,
@@ -69,20 +75,37 @@ export function EmailAuth() {
                     </div>
                 </div>
 
-                <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground ml-1">Password</label>
-                    <div className="relative">
-                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                            type="password"
-                            placeholder="••••••••"
-                            className="pl-10"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
-                        />
+                {mode !== "reset" && (
+                    <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs font-medium text-muted-foreground ml-1">Password</label>
+                            {mode === "signin" && (
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setMode("reset");
+                                        setError(null);
+                                        setMessage(null);
+                                    }}
+                                    className="text-xs text-primary hover:underline"
+                                >
+                                    Forgot password?
+                                </button>
+                            )}
+                        </div>
+                        <div className="relative">
+                            <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                            <Input
+                                type="password"
+                                placeholder="••••••••"
+                                className="pl-10"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                            />
+                        </div>
                     </div>
-                </div>
+                )}
 
                 <AnimatePresence mode="wait">
                     {error && (
@@ -113,7 +136,7 @@ export function EmailAuth() {
                     isLoading={isLoading}
                     rightIcon={mode === "signin" ? ArrowRight : undefined}
                 >
-                    {mode === "signin" ? "Sign In" : "Create Account"}
+                    {mode === "signin" ? "Sign In" : mode === "signup" ? "Create Account" : "Send Reset Link"}
                 </Button>
             </form>
 
@@ -129,7 +152,9 @@ export function EmailAuth() {
                 >
                     {mode === "signin"
                         ? "Don't have an account? Sign up"
-                        : "Already have an account? Sign in"}
+                        : mode === "signup"
+                            ? "Already have an account? Sign in"
+                            : "Back to sign in"}
                 </button>
             </div>
         </div>

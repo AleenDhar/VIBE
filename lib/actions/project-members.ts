@@ -187,3 +187,93 @@ export async function grantAccessToAllUsers(projectId: string) {
     revalidatePath(`/projects/${projectId}`);
     return { success: true, count: newMembers.length };
 }
+
+export async function getAllWorkspaceUsers() {
+    const supabase = await createClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return [];
+    }
+
+    // Same approach as grantAccessToAllUsers: fetch all non-admin users from profiles
+    const { data: allUsers, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, avatar_url, role')
+        .eq('role', 'user')
+        .order('full_name', { ascending: true });
+
+    if (error) {
+        console.error("Failed to fetch workspace users:", error);
+        return [];
+    }
+
+    return allUsers || [];
+}
+
+export async function toggleUserProjectAccess(projectId: string, userId: string, grant: boolean) {
+    const supabase = await createClient();
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+        return { error: "Unauthorized" };
+    }
+
+    // Check if user is admin or project owner
+    const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+    if (!profile || !['admin', 'super_admin'].includes(profile.role)) {
+        const { data: project } = await supabase
+            .from('projects')
+            .select('owner_id')
+            .eq('id', projectId)
+            .single();
+
+        if (!project || project.owner_id !== user.id) {
+            return { error: "Only admins or project owners can manage access" };
+        }
+    }
+
+    if (grant) {
+        // Check if already a member
+        const { data: existing } = await supabase
+            .from('project_members')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('user_id', userId)
+            .single();
+
+        if (existing) {
+            return { success: true }; // Already a member, no-op
+        }
+
+        const { error: insertError } = await supabase
+            .from('project_members')
+            .insert({
+                project_id: projectId,
+                user_id: userId,
+                role: "viewer"
+            });
+
+        if (insertError) {
+            return { error: insertError.message };
+        }
+    } else {
+        const { error: deleteError } = await supabase
+            .from('project_members')
+            .delete()
+            .eq('project_id', projectId)
+            .eq('user_id', userId);
+
+        if (deleteError) {
+            return { error: deleteError.message };
+        }
+    }
+
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true };
+}
