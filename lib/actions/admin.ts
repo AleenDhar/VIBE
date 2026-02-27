@@ -162,33 +162,15 @@ export async function updateUserRole(userId: string, newRole: 'admin' | 'user' |
         return { success: false, error: "Unauthorized" };
     }
 
-    // Only super_admin can grant/revoke super_admin role
-    if (newRole === 'super_admin') {
-        const isSuperAdmin = await verifySuperAdmin();
-        if (!isSuperAdmin) {
-            return { success: false, error: "Only Super Admins can grant Super Admin role." };
-        }
-    }
-
-    // Prevent removing super_admin role from others unless you're super_admin
     const supabase = await createClient();
-    const { data: targetProfile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", userId)
-        .single();
 
-    if (targetProfile?.role === 'super_admin' && newRole !== 'super_admin') {
-        const isSuperAdmin = await verifySuperAdmin();
-        if (!isSuperAdmin) {
-            return { success: false, error: "Only Super Admins can demote a Super Admin." };
-        }
-    }
-
-    const { error } = await supabase
-        .from("profiles")
-        .update({ role: newRole })
-        .eq("id", userId);
+    // Use SECURITY DEFINER RPC function to bypass RLS for trusted admin operations.
+    // All permission checks (super_admin grants, demotions) are enforced inside the
+    // Postgres function itself, so we don't need to duplicate them here.
+    const { error } = await supabase.rpc('update_user_role', {
+        target_user_id: userId,
+        new_role: newRole,
+    });
 
     if (error) {
         return { success: false, error: error.message };

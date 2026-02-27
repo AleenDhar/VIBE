@@ -85,7 +85,9 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
 
         try {
             const res = await toggleUserProjectAccess(projectId, userId, !currentlyMember);
-            if (res.error) {
+            if (!res) {
+                setError("No response received from server");
+            } else if (res.error) {
                 setError(res.error);
             } else {
                 // Refresh members list
@@ -93,7 +95,8 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
                 setMembers(membersData || []);
             }
         } catch (err: any) {
-            setError(err.message || "Failed to toggle access");
+            console.error("[handleToggle] Error:", err);
+            setError(err.message || "An unexpected error occurred while toggling access");
         } finally {
             setTogglingUserId(null);
         }

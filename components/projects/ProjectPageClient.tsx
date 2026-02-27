@@ -38,6 +38,7 @@ interface Chat {
 interface ProjectPageClientProps {
     project: any;
     isOwner: boolean;
+    canManageAccess: boolean;
     initialChats: Chat[];
     initialDocuments: any[];
     initialMemories: any[];
@@ -46,6 +47,7 @@ interface ProjectPageClientProps {
 export function ProjectPageClient({
     project,
     isOwner,
+    canManageAccess,
     initialChats,
     initialDocuments,
     initialMemories,
@@ -261,7 +263,7 @@ export function ProjectPageClient({
                                 />
                                 <ProjectAccessManager
                                     projectId={project.id}
-                                    canEdit={isOwner}
+                                    canEdit={canManageAccess}
                                 />
                             </div>
                         </div>
