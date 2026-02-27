@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { updateSession } from "@/lib/supabase/middleware";
+import { updateSession } from "@/lib/supabase/proxy";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
     try {
         const { response, user } = await updateSession(request);
 
@@ -38,7 +38,7 @@ export async function middleware(request: NextRequest) {
 
         return response;
     } catch (e) {
-        console.error("Middleware failed:", e);
+        console.error("Proxy failed:", e);
         return NextResponse.next({
             request: {
                 headers: request.headers,

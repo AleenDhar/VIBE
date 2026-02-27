@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mail, Lock, ArrowRight, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { loginWithEmail, signUpWithEmail, resetPasswordForEmail } from "@/app/auth/actions";
 
 export function EmailAuth() {
     const [email, setEmail] = useState("");
@@ -15,8 +14,6 @@ export function EmailAuth() {
     const [mode, setMode] = useState<"signin" | "signup" | "reset">("signin");
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
-    const router = useRouter();
-    const supabase = createClient();
 
     const handleEmailAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -26,34 +23,21 @@ export function EmailAuth() {
 
         try {
             if (mode === "reset") {
-                const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: `${window.location.origin}/auth/callback?next=/auth/update-password`,
-                });
-                if (resetError) throw resetError;
-                setMessage("Check your email for the password reset link.");
+                const res = await resetPasswordForEmail(email);
+                if (res?.error) throw new Error(res.error);
+                if (res?.message) setMessage(res.message);
             } else if (mode === "signup") {
-                const { error: signUpError } = await supabase.auth.signUp({
-                    email,
-                    password,
-                    options: {
-                        emailRedirectTo: `${window.location.origin}/auth/callback`,
-                    },
-                });
-                if (signUpError) throw signUpError;
-                setMessage("Check your email for the confirmation link.");
+                const res = await signUpWithEmail(email, password);
+                if (res?.error) throw new Error(res.error);
+                if (res?.message) setMessage(res.message);
             } else {
-                const { error: signInError } = await supabase.auth.signInWithPassword({
-                    email,
-                    password,
-                });
-                if (signInError) throw signInError;
-                router.refresh();
-                router.push("/projects");
+                const res = await loginWithEmail(email, password);
+                if (res?.error) throw new Error(res.error);
+                // loginWithEmail will redirect to /projects on success
             }
         } catch (err: any) {
             setError(err.message || "An error occurred during authentication.");
-        } finally {
-            setIsLoading(false);
+            setIsLoading(false); // Only set false on error, as success redirects
         }
     };
 
