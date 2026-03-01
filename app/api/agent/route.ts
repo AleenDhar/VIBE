@@ -136,6 +136,17 @@ export async function POST(req: NextRequest) {
                 systemPrompt += `\n\n## Project Context:\n${memories.map(m => `- [${m.memory_type}] ${m.content}`).join('\n')}`;
             }
 
+            // 6.a-2 Add attached file names
+            const { data: documents } = await supabase
+                .from("documents")
+                .select("name")
+                .eq("project_id", projectId);
+
+            if (documents?.length) {
+                const fileList = documents.map(d => `- ${d.name}`).join('\n');
+                systemPrompt += `\n\n## Attached Project Files:\nThe following files are attached to this project:\n${fileList}`;
+            }
+
             // 6.b Add RAG (Document Search)
             try {
                 const openaiKey = config.openai_api_key;

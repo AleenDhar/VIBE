@@ -185,9 +185,14 @@ export async function POST(req: NextRequest) {
                         systemPrompt += `\n\n## Relevant Document Excerpts\nBased on the user's latest message, here are the most relevant excerpts from the project's attached files. Use these to answer the user's questions definitively:\n\n${docsContext}`;
                     } else {
                         // Let the agent know files exist but nothing specific matched
-                        const { data: docsCount } = await supabase.from("documents").select("id", { count: "exact" }).eq("project_id", finalProjectId);
-                        if (docsCount && docsCount.length > 0) {
-                            systemPrompt += `\n\n## Attached Project Files\nThere are ${docsCount.length} files attached to this project, but no highly relevant excerpts matched the user's current query.`;
+                        const { data: documents } = await supabase
+                            .from("documents")
+                            .select("name")
+                            .eq("project_id", finalProjectId);
+
+                        if (documents && documents.length > 0) {
+                            const fileNames = documents.map(d => d.name).join(", ");
+                            systemPrompt += `\n\n## Attached Project Files\nThere are ${documents.length} files attached to this project: ${fileNames}. However, no highly relevant excerpts from their content matched the user's current query.`;
                         }
                     }
                 }
