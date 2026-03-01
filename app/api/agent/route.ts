@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { generateEmbeddings } from "@/lib/rag-utils";
 
 export const dynamic = 'force-dynamic';
 
@@ -133,6 +134,38 @@ export async function POST(req: NextRequest) {
 
             if (memories?.length) {
                 systemPrompt += `\n\n## Project Context:\n${memories.map(m => `- [${m.memory_type}] ${m.content}`).join('\n')}`;
+            }
+
+            // 6.b Add RAG (Document Search)
+            try {
+                const openaiKey = config.openai_api_key;
+                if (openaiKey) {
+                    const queryEmbedding = await generateEmbeddings([content], openaiKey);
+
+                    if (queryEmbedding && queryEmbedding.length > 0) {
+                        const { data: relevantChunks, error: rpcError } = await supabase.rpc(
+                            "match_document_chunks",
+                            {
+                                query_embedding: queryEmbedding[0],
+                                match_project_id: projectId,
+                                match_threshold: 0.3,
+                                match_count: 5
+                            }
+                        );
+
+                        if (rpcError) throw rpcError;
+
+                        if (relevantChunks && relevantChunks.length > 0) {
+                            const docsContext = relevantChunks
+                                .map((chunk: any) => `[Excerpt]:\n${chunk.content}`)
+                                .join("\n\n---\n\n");
+
+                            systemPrompt += `\n\n## Relevant Document Excerpts\nBased on the user's latest message, here are relevant excerpts from project files. Use these to answer accurately:\n\n${docsContext}`;
+                        }
+                    }
+                }
+            } catch (ragError) {
+                console.error("[Proxy] RAG Document Search Failed:", ragError);
             }
         }
 
