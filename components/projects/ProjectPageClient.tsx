@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2 } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil } from "lucide-react";
 import Link from "next/link";
 import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
@@ -66,6 +66,8 @@ export function ProjectPageClient({
     const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [uploadingFile, setUploadingFile] = useState(false);
+    const [cloning, setCloning] = useState(false);
+    const [projectName, setProjectName] = useState(project.name);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -219,6 +221,43 @@ export function ProjectPageClient({
         await handleNewChat(msg);
     };
 
+    const handleCloneProject = async () => {
+        if (cloning) return;
+        setCloning(true);
+        try {
+            const { cloneProject } = await import("@/lib/actions/projects");
+            const result = await cloneProject(project.id);
+            if (result.error) {
+                alert(`Clone failed: ${result.error}`);
+            } else if (result.newProjectId) {
+                router.push(`/projects/${result.newProjectId}`);
+            }
+        } catch (err) {
+            console.error("Error cloning project:", err);
+            alert("Failed to clone project.");
+        } finally {
+            setCloning(false);
+        }
+    };
+
+    const handleRenameProject = async () => {
+        const newName = prompt("Enter new project name:", projectName);
+        if (!newName || newName.trim() === projectName) return;
+        try {
+            const { renameProject } = await import("@/lib/actions/projects");
+            const result = await renameProject(project.id, newName.trim());
+            if (result.error) {
+                alert(`Rename failed: ${result.error}`);
+            } else {
+                setProjectName(newName.trim());
+                router.refresh();
+            }
+        } catch (err) {
+            console.error("Error renaming project:", err);
+            alert("Failed to rename project.");
+        }
+    };
+
     // Removed handleSelectChat
     // Removed handleBackToList
 
@@ -241,12 +280,30 @@ export function ProjectPageClient({
                         <div className="space-y-4">
                             <div className="flex items-start justify-between">
                                 <h1 className="text-3xl md:text-4xl font-serif font-medium tracking-tight text-foreground">
-                                    {project.name}
+                                    {projectName}
                                 </h1>
                                 <div className="flex items-center gap-2 text-muted-foreground">
-                                    <Button variant="ghost" size="icon">
-                                        <MoreHorizontal className="h-5 w-5" />
-                                    </Button>
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="ghost" size="icon">
+                                                <MoreHorizontal className="h-5 w-5" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end" className="w-48">
+                                            <DropdownMenuItem onClick={handleRenameProject}>
+                                                <Pencil className="mr-2 h-4 w-4" />
+                                                Rename
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onClick={handleCloneProject} disabled={cloning}>
+                                                {cloning ? (
+                                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <Copy className="mr-2 h-4 w-4" />
+                                                )}
+                                                {cloning ? "Cloning..." : "Clone Project"}
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
                                     <Button variant="ghost" size="icon">
                                         <Star className="h-5 w-5" />
                                     </Button>
