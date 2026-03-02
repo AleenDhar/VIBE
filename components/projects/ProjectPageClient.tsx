@@ -40,6 +40,7 @@ interface ProjectPageClientProps {
     project: any;
     isOwner: boolean;
     canManageAccess: boolean;
+    canEdit: boolean;
     initialChats: Chat[];
     initialDocuments: any[];
     initialMemories: any[];
@@ -49,6 +50,7 @@ export function ProjectPageClient({
     project,
     isOwner,
     canManageAccess,
+    canEdit,
     initialChats,
     initialDocuments,
     initialMemories,
@@ -242,6 +244,7 @@ export function ProjectPageClient({
     };
 
     const handleRenameProject = async () => {
+        if (!isOwner) return; // Only owner
         const newName = prompt("Enter new project name:", projectName);
         if (!newName || newName.trim() === projectName) return;
         try {
@@ -291,10 +294,12 @@ export function ProjectPageClient({
                                             </Button>
                                         </DropdownMenuTrigger>
                                         <DropdownMenuContent align="end" className="w-48">
-                                            <DropdownMenuItem onClick={handleRenameProject}>
-                                                <Pencil className="mr-2 h-4 w-4" />
-                                                Rename
-                                            </DropdownMenuItem>
+                                            {isOwner && (
+                                                <DropdownMenuItem onClick={handleRenameProject}>
+                                                    <Pencil className="mr-2 h-4 w-4" />
+                                                    Rename
+                                                </DropdownMenuItem>
+                                            )}
                                             <DropdownMenuItem onClick={handleCloneProject} disabled={cloning}>
                                                 {cloning ? (
                                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -504,21 +509,23 @@ export function ProjectPageClient({
                     <div className="p-1">
                         <h3 className="font-medium mb-4 flex items-center justify-between">
                             Memory
-                            <span className="text-[10px] bg-secondary px-2 py-0.5 rounded text-muted-foreground border">Only you</span>
+                            {isOwner ? (
+                                <span className="text-[10px] bg-secondary px-2 py-0.5 rounded text-muted-foreground border">Only you</span>
+                            ) : null}
                         </h3>
                         <div className="text-sm text-muted-foreground">
-                            <MemoryManager projectId={project.id} memories={initialMemories} />
+                            <MemoryManager projectId={project.id} memories={initialMemories} canEdit={canEdit} />
                         </div>
                     </div>
 
                     {/* Instructions Section */}
                     <div className="p-1">
-                        <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} />
+                        <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} canEdit={canEdit} />
                     </div>
 
                     {/* Files Section */}
                     <div className="p-1">
-                        <ProjectFiles projectId={project.id} initialFiles={initialDocuments} />
+                        <ProjectFiles projectId={project.id} initialFiles={initialDocuments} canEdit={canEdit} />
                     </div>
                 </div>
             </div>

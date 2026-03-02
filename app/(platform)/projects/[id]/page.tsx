@@ -36,20 +36,26 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
     const isAdmin = currentProfile?.role === 'admin' || currentProfile?.role === 'super_admin';
 
-    // Check if this admin user is a member of the project (has access)
-    let isAdminWithAccess = false;
-    if (isAdmin && !isOwner) {
+    // Check project membership for non-owners to determine if they are editors
+    let isEditor = false;
+    let hasAccess = isOwner || isAdmin;
+
+    if (!isOwner) {
         const { data: membership } = await supabase
             .from('project_members')
-            .select('id')
+            .select('role')
             .eq('project_id', id)
             .eq('user_id', user.id)
             .maybeSingle();
 
-        isAdminWithAccess = !!membership;
+        if (membership) {
+            hasAccess = true;
+            isEditor = membership.role === 'editor';
+        }
     }
 
-    const canManageAccess = isOwner || isAdminWithAccess;
+    const canManageAccess = isOwner || isAdmin;
+    const canEdit = isOwner || isEditor || isAdmin;
 
     // Fetch active chats for this project
     const { data: chats } = await supabase
@@ -101,6 +107,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             project={project}
             isOwner={isOwner}
             canManageAccess={canManageAccess}
+            canEdit={canEdit}
             initialChats={filteredChats}
             initialDocuments={documents || []}
             initialMemories={allMemories}
