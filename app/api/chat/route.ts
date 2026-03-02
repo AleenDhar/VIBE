@@ -243,7 +243,7 @@ export async function POST(req: NextRequest) {
         const payload = {
             messages: messagesPayload,
             system_prompt: systemPrompt,
-            model: model || "anthropic:claude-opus-4-6", // User preference from chat.ts
+            model: model || "anthropic:claude-haiku-4-5", // User preference from chat.ts
             stream: true,
             chat_id: chatId, // Pass chat_id so server can log directly to DB
             project_id: finalProjectId,

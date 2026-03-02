@@ -216,7 +216,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
-    const [model, setModel] = useState(initialModel || "anthropic:claude-opus-4-6");
+    const [model, setModel] = useState(initialModel || "anthropic:claude-haiku-4-5");
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);
     const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
@@ -1562,7 +1562,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     {model === "openai:gpt-5.2" && "GPT-5.2"}
                                     {model === "google_genai:gemini-3-pro-preview" && "Gemini 3 Pro"}
                                     {model === "google_genai:gemini-3-flash-preview" && "Gemini 3 Flash"}
-                                    {model === "anthropic:claude-opus-4-6" && "Opus 4.6"}
+                                    {model === "anthropic:claude-haiku-4-5" && "Haiku 4.5"}
                                     {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
@@ -1577,8 +1577,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
                                     GPT 5.2
                                 </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-opus-4-6")}>
-                                    Opus 4.6
+                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-haiku-4-5")}>
+                                    Haiku 4.5
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-6")}>
                                     Sonnet 4.6

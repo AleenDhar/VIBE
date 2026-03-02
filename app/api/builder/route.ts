@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   } = await req.json();
 
   const result = streamText({
-    model: anthropic('claude-opus-4-6'),
+    model: anthropic('claude-haiku-4-5'),
     messages: messages
       .filter(m => m.content && m.content.trim().length > 0)
       .map(m => ({
