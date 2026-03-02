@@ -185,14 +185,9 @@ export async function POST(req: NextRequest) {
                         systemPrompt += `\n\n## Relevant Document Excerpts\nBased on the user's latest message, here are the most relevant excerpts from the project's attached files. Use these to answer the user's questions definitively:\n\n${docsContext}`;
                     } else {
                         // Let the agent know files exist but nothing specific matched
-                        const { data: documents } = await supabase
-                            .from("documents")
-                            .select("name")
-                            .eq("project_id", finalProjectId);
-
-                        if (documents && documents.length > 0) {
-                            const fileNames = documents.map(d => d.name).join(", ");
-                            systemPrompt += `\n\n## Attached Project Files\nThere are ${documents.length} files attached to this project: ${fileNames}. However, no highly relevant excerpts from their content matched the user's current query.`;
+                        const { data: docsCount } = await supabase.from("documents").select("id", { count: "exact" }).eq("project_id", finalProjectId);
+                        if (docsCount && docsCount.length > 0) {
+                            systemPrompt += `\n\n## Attached Project Files\nThere are ${docsCount.length} files attached to this project, but no highly relevant excerpts matched the user's current query.`;
                         }
                     }
                 }
@@ -246,6 +241,7 @@ export async function POST(req: NextRequest) {
             model: model || "anthropic:claude-opus-4-6", // User preference from chat.ts
             stream: true,
             chat_id: chatId, // Pass chat_id so server can log directly to DB
+            project_id: finalProjectId,
             api_keys: apiKeys
             // enable_research: true // Optional: could be passed from client if needed
         };

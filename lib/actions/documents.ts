@@ -24,24 +24,41 @@ async function extractTextFromFile(filePath: string): Promise<string> {
     const buffer = await data.arrayBuffer();
 
     try {
+        console.log(`[Extract] Parsing ${fileExt} file: ${filePath}`);
+
         if (fileExt === 'pdf') {
-            const pdfjs = await import('pdfjs-dist');
-            // Setting worker path might be needed depending on environment, 
-            // but in Next.js it usually handles it or we use a basic approach.
-            const loadingTask = pdfjs.getDocument({ data: buffer });
+            // Use legacy build for better Node.js compatibility in some environments
+            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
+            // Standard PDF.js parsing
+            const loadingTask = pdfjs.getDocument({
+                data: buffer,
+                useWorkerFetch: false,
+                isEvalSupported: false,
+                useSystemFonts: true
+            });
+
             const pdf = await loadingTask.promise;
+            console.log(`[Extract] PDF loaded: ${pdf.numPages} pages`);
+
             let text = "";
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const content = await page.getTextContent();
-                text += content.items.map((item: any) => item.str).join(" ") + "\n";
+                const pageText = content.items
+                    .map((item: any) => item.str)
+                    .join(" ");
+                text += pageText + "\n";
             }
+
+            console.log(`[Extract] PDF text extraction complete. Length: ${text.length}`);
             return text;
         }
 
         if (fileExt === 'docx') {
             const mammoth = await import('mammoth');
             const result = await mammoth.extractRawText({ arrayBuffer: buffer });
+            console.log(`[Extract] DOCX text extraction complete. Length: ${result.value.length}`);
             return result.value;
         }
 
@@ -53,15 +70,18 @@ async function extractTextFromFile(filePath: string): Promise<string> {
                 const sheet = workbook.Sheets[sheetName];
                 text += `Sheet: ${sheetName}\n` + xlsx.utils.sheet_to_txt(sheet) + "\n\n";
             });
+            console.log(`[Extract] XLSX text extraction complete. Sheets: ${workbook.SheetNames.length}`);
             return text;
         }
 
         // Default to text parsing
         const textContent = new TextDecoder().decode(buffer);
+        console.log(`[Extract] Text file extraction complete. Length: ${textContent.length}`);
         return textContent;
 
     } catch (e: any) {
-        console.error(`Error parsing ${fileExt} file:`, e);
+        console.error(`[Extract] Error parsing ${fileExt} file:`, e);
+        // Return a descriptive error that might be stored in the content if needed
         throw new Error(`Failed to parse ${fileExt} file: ${e.message}`);
     }
 }

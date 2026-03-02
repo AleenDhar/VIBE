@@ -28,7 +28,7 @@ import {
     ExternalLink
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
-import { cn } from "@/lib/utils";
+import { cn, uuid } from "@/lib/utils";
 
 interface ChatMessage {
     id: string;
@@ -395,7 +395,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
         try {
             // Add user message to chat (unless it's already there from DB load)
             if (!skipUserMessage) {
-                const userMsgId = crypto.randomUUID();
+                const userMsgId = uuid();
                 setMessages(prev => [...prev, {
                     id: userMsgId,
                     role: "user",
@@ -513,7 +513,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             // Add assistant message to history (FULL CONTENT so AI remembers context)
             if (fullResponse.trim()) {
                 setMessages(prev => [...prev, {
-                    id: crypto.randomUUID(),
+                    id: uuid(),
                     role: "assistant",
                     content: fullResponse,
                     hasCode,
@@ -553,7 +553,7 @@ function AppBuilderWorkspaceInner({ sessionId }: AppBuilderWorkspaceProps) {
             console.error("Build error details:", err);
             const errorMessage = err.message || "An unexpected error occurred.";
             setMessages(prev => [...prev, {
-                id: crypto.randomUUID(),
+                id: uuid(),
                 role: "assistant",
                 content: `🚨 ** Build Error:** ${errorMessage} \n\nThe AI architect might be overwhelmed or the connection was lost.Please try a simpler prompt or refresh the page.`,
             }]);

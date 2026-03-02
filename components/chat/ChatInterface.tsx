@@ -4,6 +4,7 @@ import { createElement, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
+import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -609,7 +610,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             setPendingDocuments([]);
         }
 
-        const tempId = crypto.randomUUID();
+        const tempId = uuid();
         // Add created_at timestamp and images
         const userMsg = { role: "user", content: finalMessageContent, id: tempId, created_at: new Date().toISOString(), images: imagesToSend };
         setMessages(prev => [...prev, userMsg]);
@@ -618,7 +619,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         setThinkingText("Thinking...");
 
         // Placeholder for assistant message
-        const assistantMsgId = crypto.randomUUID();
+        const assistantMsgId = uuid();
         setMessages(prev => [...prev, {
             role: "assistant",
             content: "",
