@@ -154,8 +154,12 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
     };
 
     const handleLogout = async () => {
-        await supabase.auth.signOut();
-        router.push("/");
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            console.error("SignOut error:", error);
+            await supabase.auth.signOut({ scope: "local" });
+        }
+        window.location.href = "/";
     };
 
     const getChatHref = (chat: RecentChat) => {

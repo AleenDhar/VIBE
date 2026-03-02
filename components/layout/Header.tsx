@@ -30,9 +30,15 @@ export function Header({ onMenuClick }: HeaderProps) {
     const [user, setUser] = React.useState<any>(null);
 
     const handleSignOut = async () => {
-        await supabase.auth.signOut();
-        router.refresh();
-        router.push("/");
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            console.error("SignOut error:", error);
+            // Force clear local storage and cookies if server signout fails
+            await supabase.auth.signOut({ scope: "local" });
+        }
+
+        // Use hard redirect to clear all Next.js client-side cache
+        window.location.href = "/";
     };
 
     React.useEffect(() => {
