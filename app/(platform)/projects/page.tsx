@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import Link from "next/link";
 import { FolderPlus, Users } from "lucide-react";
+import { ProjectCardActions } from "@/components/projects/ProjectCardActions";
 
 export const dynamic = "force-dynamic";
 
@@ -34,38 +35,45 @@ export default async function ProjectsPage() {
     const sharedProjects = projects.filter((p: any) => p.owner_id !== user?.id);
 
     const ProjectCard = ({ project }: { project: any }) => (
-        <Link key={project.id} href={`/projects/${project.id}`}>
-            <Card className="h-full transition-all hover:border-primary hover:shadow-md cursor-pointer">
-                <CardHeader>
-                    <div className="flex justify-between items-start">
-                        <CardTitle className="line-clamp-1">{project.name}</CardTitle>
-                        {project.visibility === 'public' && (
-                            <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full whitespace-nowrap ml-2">
-                                Public
+        <div className="relative group">
+            <Link key={project.id} href={`/projects/${project.id}`}>
+                <Card className="h-full transition-all hover:border-primary hover:shadow-md cursor-pointer">
+                    <CardHeader>
+                        <div className="flex justify-between items-start">
+                            <CardTitle className="line-clamp-1">{project.name}</CardTitle>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                                {project.visibility === 'public' && (
+                                    <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                        Public
+                                    </span>
+                                )}
+                                {project.owner_id !== user?.id && (
+                                    <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                        Shared
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <CardDescription className="line-clamp-2">
+                            {project.description || "No description provided."}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>
+                                {new Date(project.created_at).toLocaleDateString()}
                             </span>
-                        )}
-                        {project.owner_id !== user?.id && (
-                            <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 px-2 py-0.5 rounded-full whitespace-nowrap ml-2">
-                                Shared
+                            <span className="capitalize px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground font-medium">
+                                {project.status}
                             </span>
-                        )}
-                    </div>
-                    <CardDescription className="line-clamp-2">
-                        {project.description || "No description provided."}
-                    </CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>
-                            {new Date(project.created_at).toLocaleDateString()}
-                        </span>
-                        <span className="capitalize px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground font-medium">
-                            {project.status}
-                        </span>
-                    </div>
-                </CardContent>
-            </Card>
-        </Link>
+                        </div>
+                    </CardContent>
+                </Card>
+            </Link>
+            <div className="absolute top-3 right-3 z-10">
+                <ProjectCardActions projectId={project.id} projectName={project.name} />
+            </div>
+        </div>
     );
 
     return (
