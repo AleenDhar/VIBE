@@ -33,6 +33,8 @@ function normalizeModel(model: string): string {
         "gemini-2.5-flash": "google:gemini-1.5-flash",
         "gemini-2.0-flash": "google:gemini-2.0-flash",
         "gpt-5-mini": "openai:gpt-5-mini",
+        "claude-sonnet-4-5": "anthropic:claude-sonnet-4-5",
+        "claude-sonnet-4-6": "anthropic:claude-sonnet-4-6",
     };
 
     if (mapping[model]) return mapping[model];

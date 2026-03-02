@@ -1562,6 +1562,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     {model === "google_genai:gemini-3-flash-preview" && "Gemini 3 Flash"}
                                     {model === "openai:gpt-5-mini" && "GPT 5 Mini"}
                                     {model === "anthropic:claude-haiku-4-5" && "Haiku 4.5"}
+                                    {model === "anthropic:claude-sonnet-4-5" && "Sonnet 4.5"}
                                     {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
@@ -1581,6 +1582,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("anthropic:claude-haiku-4-5")}>
                                     Haiku 4.5
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-5")}>
+                                    Sonnet 4.5
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-6")}>
                                     Sonnet 4.6

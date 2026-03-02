@@ -14,6 +14,7 @@ import {
 
 const MODELS = [
     { id: "anthropic:claude-haiku-4-5", label: "Haiku 4.5" },
+    { id: "anthropic:claude-sonnet-4-5", label: "Sonnet 4.5" },
     { id: "anthropic:claude-sonnet-4-6", label: "Sonnet 4.6" },
     { id: "google_genai:gemini-3-pro-preview", label: "Gemini 3 Pro" },
     { id: "google_genai:gemini-3-flash-preview", label: "Gemini 3 Flash" },
