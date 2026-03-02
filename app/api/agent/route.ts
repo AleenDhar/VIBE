@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
 
             if (documents?.length) {
                 const fileList = documents.map(d => `- ${d.name}`).join('\n');
-                systemPrompt += `\n\n## Attached Project Files:\nThe following files are attached to this project:\n${fileList}`;
+                systemPrompt += `\n\n## Attached Project Files:\nThe following files are attached to this project:\n${fileList}\n\nIMPORTANT: You have access to these files through the search_knowledge tool. If the user asks you to read, summarize, or reference any of these files, use the search_knowledge tool to retrieve their contents. Do NOT attempt to access files via local filesystem commands like ls, cat, or any shell tools — the files are stored in a remote database, not on your local filesystem.`;
             }
 
             // 6.b Add RAG (Document Search)
@@ -207,6 +207,7 @@ export async function POST(req: NextRequest) {
             model: normalizeModel(model),
             stream: !structured_output_format,
             chat_id: chatId,
+            project_id: projectId,
             api_keys: {
                 openai_api_key: config.openai_api_key,
                 google_api_key: config.google_api_key,
