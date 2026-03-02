@@ -223,14 +223,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const router = useRouter();
-
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
     const supabase = createClient();
-
     // Handle creating a new chat in the same project
     const handleNewChat = async () => {
         if (!projectId || creatingNewChat) return;
@@ -1562,6 +1560,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     {model === "openai:gpt-5.2" && "GPT-5.2"}
                                     {model === "google_genai:gemini-3-pro-preview" && "Gemini 3 Pro"}
                                     {model === "google_genai:gemini-3-flash-preview" && "Gemini 3 Flash"}
+                                    {model === "openai:gpt-5-mini" && "GPT 5 Mini"}
                                     {model === "anthropic:claude-haiku-4-5" && "Haiku 4.5"}
                                     {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
@@ -1576,6 +1575,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
                                     GPT 5.2
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setModel("openai:gpt-5-mini")}>
+                                    GPT 5 Mini
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setModel("anthropic:claude-haiku-4-5")}>
                                     Haiku 4.5

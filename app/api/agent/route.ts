@@ -32,6 +32,7 @@ function normalizeModel(model: string): string {
         "gemini-2.5-pro": "google:gemini-1.5-pro",
         "gemini-2.5-flash": "google:gemini-1.5-flash",
         "gemini-2.0-flash": "google:gemini-2.0-flash",
+        "gpt-5-mini": "openai:gpt-5-mini",
     };
 
     if (mapping[model]) return mapping[model];
