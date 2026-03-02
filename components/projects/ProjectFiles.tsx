@@ -9,6 +9,7 @@ import { extractFileContent } from "@/lib/extract-file-content";
 interface ProjectFilesProps {
     projectId: string;
     initialFiles: any[];
+    canEdit: boolean;
 }
 
 function getFileExtension(filename: string): string {
@@ -17,7 +18,7 @@ function getFileExtension(filename: string): string {
     return parts[parts.length - 1].toUpperCase();
 }
 
-export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
+export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesProps) {
     const [files, setFiles] = useState(initialFiles);
     const [uploading, setUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState("");
@@ -138,22 +139,24 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
         <div className="space-y-3">
             <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-base text-foreground">Files</h3>
-                <label className="cursor-pointer">
-                    <input
-                        type="file"
-                        className="hidden"
-                        onChange={handleUpload}
-                        disabled={uploading}
-                        accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.md"
-                    />
-                    <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
-                        {uploading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                            <Plus className="h-4 w-4" />
-                        )}
-                    </div>
-                </label>
+                {canEdit && (
+                    <label className="cursor-pointer">
+                        <input
+                            type="file"
+                            className="hidden"
+                            onChange={handleUpload}
+                            disabled={uploading}
+                            accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.md"
+                        />
+                        <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                            {uploading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                                <Plus className="h-4 w-4" />
+                            )}
+                        </div>
+                    </label>
+                )}
             </div>
 
             {/* Upload status indicator */}
@@ -174,14 +177,16 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                                 key={doc.id}
                                 className="group relative flex flex-col justify-between rounded-xl border border-border bg-card/50 p-4 min-h-[120px] hover:border-primary/40 transition-all"
                             >
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                                    onClick={() => handleDelete(doc.id, doc.file_path)}
-                                >
-                                    <Trash2 className="h-3 w-3" />
-                                </Button>
+                                {canEdit && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                                        onClick={() => handleDelete(doc.id, doc.file_path)}
+                                    >
+                                        <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                )}
 
                                 <p className="text-sm font-medium text-foreground leading-snug pr-6 line-clamp-3">
                                     {doc.name}
@@ -197,19 +202,21 @@ export function ProjectFiles({ projectId, initialFiles }: ProjectFilesProps) {
                                             <span>Indexed</span>
                                         </span>
                                     ) : (
-                                        <button
-                                            onClick={() => handleReindex(doc)}
-                                            disabled={indexingId === doc.id}
-                                            className="inline-flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 transition-colors cursor-pointer"
-                                            title="Extract content so AI can read this file"
-                                        >
-                                            {indexingId === doc.id ? (
-                                                <Loader2 className="h-3 w-3 animate-spin" />
-                                            ) : (
-                                                <RefreshCw className="h-3 w-3" />
-                                            )}
-                                            <span>{indexingId === doc.id ? "Indexing..." : "Index"}</span>
-                                        </button>
+                                        canEdit && (
+                                            <button
+                                                onClick={() => handleReindex(doc)}
+                                                disabled={indexingId === doc.id}
+                                                className="inline-flex items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 transition-colors cursor-pointer"
+                                                title="Extract content so AI can read this file"
+                                            >
+                                                {indexingId === doc.id ? (
+                                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                                ) : (
+                                                    <RefreshCw className="h-3 w-3" />
+                                                )}
+                                                <span>{indexingId === doc.id ? "Indexing..." : "Index"}</span>
+                                            </button>
+                                        )
                                     )}
                                 </div>
                             </div>

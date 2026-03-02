@@ -7,9 +7,10 @@ import { Pencil, Save, X } from "lucide-react";
 interface SystemPromptCardProps {
     projectId: string;
     initialPrompt: string | null;
+    canEdit: boolean;
 }
 
-export function SystemPromptCard({ projectId, initialPrompt }: SystemPromptCardProps) {
+export function SystemPromptCard({ projectId, initialPrompt, canEdit }: SystemPromptCardProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [prompt, setPrompt] = useState(initialPrompt || "");
     const [saving, setSaving] = useState(false);
@@ -35,14 +36,16 @@ export function SystemPromptCard({ projectId, initialPrompt }: SystemPromptCardP
             <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-base text-foreground">Instructions</h3>
                 {!isEditing ? (
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                        onClick={() => setIsEditing(true)}
-                    >
-                        <Pencil className="h-4 w-4" />
-                    </Button>
+                    canEdit && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            onClick={() => setIsEditing(true)}
+                        >
+                            <Pencil className="h-4 w-4" />
+                        </Button>
+                    )
                 ) : (
                     <div className="flex gap-1">
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setPrompt(initialPrompt || ""); setIsEditing(false); }}>

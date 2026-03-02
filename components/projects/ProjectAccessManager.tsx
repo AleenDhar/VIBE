@@ -17,6 +17,7 @@ import {
     getProjectMembers,
     getAllWorkspaceUsers,
     toggleUserProjectAccess,
+    updateUserProjectRole,
 } from "@/lib/actions/project-members";
 
 interface WorkspaceUser {
@@ -37,6 +38,7 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
     const [searchQuery, setSearchQuery] = useState("");
     const [loading, setLoading] = useState(false);
     const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
+    const [togglingRoleUserId, setTogglingRoleUserId] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [open, setOpen] = useState(false);
 
@@ -102,6 +104,31 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
         }
     };
 
+    const handleRoleToggle = async (userId: string, currentRole: string) => {
+        setTogglingRoleUserId(userId);
+        setError(null);
+
+        const newRole = currentRole === "editor" ? "viewer" : "editor";
+
+        try {
+            const res = await updateUserProjectRole(projectId, userId, newRole);
+            if (!res) {
+                setError("No response received from server");
+            } else if (res.error) {
+                setError(res.error);
+            } else {
+                // Refresh members list
+                const membersData = await getProjectMembers(projectId);
+                setMembers(membersData || []);
+            }
+        } catch (err: any) {
+            console.error("[handleRoleToggle] Error:", err);
+            setError(err.message || "An unexpected error occurred while updating role");
+        } finally {
+            setTogglingRoleUserId(null);
+        }
+    };
+
     if (!canEdit) return null;
 
     const activeCount = filteredUsers.filter((u) => memberUserIds.has(u.id)).length;
@@ -154,8 +181,10 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
                     ) : (
                         <div className="space-y-1 max-h-[350px] overflow-y-auto pr-1">
                             {filteredUsers.map((user) => {
-                                const isMember = memberUserIds.has(user.id);
+                                const memberData = members.find((m) => m.user_id === user.id);
+                                const isMember = !!memberData;
                                 const isToggling = togglingUserId === user.id;
+                                const isTogglingRole = togglingRoleUserId === user.id;
 
                                 return (
                                     <div
@@ -181,15 +210,37 @@ export function ProjectAccessManager({ projectId, canEdit }: ProjectAccessManage
                                             </span>
                                         </div>
 
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            {isToggling && (
-                                                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                                        <div className="flex items-center gap-6 shrink-0">
+                                            {isMember && (
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-muted-foreground mr-1">
+                                                        Allow Editing
+                                                    </span>
+                                                    {isTogglingRole && (
+                                                        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                                                    )}
+                                                    <Switch
+                                                        checked={memberData?.role === 'editor'}
+                                                        onCheckedChange={() => handleRoleToggle(user.id, memberData?.role || 'viewer')}
+                                                        disabled={isTogglingRole || isToggling}
+                                                        className="data-[state=checked]:bg-blue-500"
+                                                    />
+                                                </div>
                                             )}
-                                            <Switch
-                                                checked={isMember}
-                                                onCheckedChange={() => handleToggle(user.id, isMember)}
-                                                disabled={isToggling}
-                                            />
+
+                                            <div className="flex items-center gap-2 border-l pl-4 border-border/50">
+                                                <span className="text-xs text-muted-foreground mr-1">
+                                                    Access
+                                                </span>
+                                                {isToggling && (
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                                                )}
+                                                <Switch
+                                                    checked={isMember}
+                                                    onCheckedChange={() => handleToggle(user.id, isMember)}
+                                                    disabled={isToggling}
+                                                />
+                                            </div>
                                         </div>
                                     </div>
                                 );

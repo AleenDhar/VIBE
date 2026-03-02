@@ -283,3 +283,50 @@ export async function toggleUserProjectAccess(projectId: string, userId: string,
         return { error: err.message || "An unexpected error occurred" };
     }
 }
+
+export async function updateUserProjectRole(projectId: string, userId: string, role: "viewer" | "editor") {
+    try {
+        const supabase = await createClient();
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return { error: "Unauthorized" };
+        }
+
+        // Check if user is admin or project owner
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .single();
+
+        if (!profile || !['admin', 'super_admin'].includes(profile.role)) {
+            const { data: project } = await supabase
+                .from('projects')
+                .select('owner_id')
+                .eq('id', projectId)
+                .single();
+
+            if (!project || project.owner_id !== user.id) {
+                return { error: "Only admins or project owners can manage roles" };
+            }
+        }
+
+        const { error: updateError } = await supabase
+            .from('project_members')
+            .update({ role })
+            .eq('project_id', projectId)
+            .eq('user_id', userId);
+
+        if (updateError) {
+            console.error("[updateUserProjectRole] Update error:", updateError);
+            return { error: updateError.message };
+        }
+
+        revalidatePath(`/projects/${projectId}`);
+        return { success: true };
+    } catch (err: any) {
+        console.error("[updateUserProjectRole] Unexpected error:", err);
+        return { error: err.message || "An unexpected error occurred" };
+    }
+}
