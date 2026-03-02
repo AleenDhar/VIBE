@@ -18,9 +18,10 @@ interface MemoryManagerProps {
     projectId: string;
     chatId?: string;
     memories: Memory[];
+    canEdit: boolean;
 }
 
-export function MemoryManager({ projectId, chatId, memories: initialMemories }: MemoryManagerProps) {
+export function MemoryManager({ projectId, chatId, memories: initialMemories, canEdit }: MemoryManagerProps) {
     const [memories, setMemories] = useState(initialMemories);
     const [extracting, setExtracting] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -131,20 +132,22 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                     <Brain className="h-5 w-5 text-primary" />
                     <h3 className="font-semibold">Project Memory</h3>
                     <span className="text-xs text-muted-foreground">({memories.length})</span>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-full hover:bg-primary/10 hover:text-primary transition-colors"
-                        onClick={() => {
-                            if (isAdding || editingId) cancelAction();
-                            else setIsAdding(true);
-                        }}
-                    >
-                        {(isAdding || editingId) ? <X className="h-3 w-3" /> : <Plus className="h-3.5 w-3.5" />}
-                    </Button>
+                    {canEdit && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 rounded-full hover:bg-primary/10 hover:text-primary transition-colors"
+                            onClick={() => {
+                                if (isAdding || editingId) cancelAction();
+                                else setIsAdding(true);
+                            }}
+                        >
+                            {(isAdding || editingId) ? <X className="h-3 w-3" /> : <Plus className="h-3.5 w-3.5" />}
+                        </Button>
+                    )}
                 </div>
 
-                {chatId && (
+                {chatId && canEdit && (
                     <Button
                         size="sm"
                         variant="ghost"
@@ -233,24 +236,26 @@ export function MemoryManager({ projectId, chatId, memories: initialMemories }: 
                                     </div>
                                     <p className="text-sm leading-relaxed">{memory.content}</p>
                                 </div>
-                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6 text-muted-foreground hover:text-primary transition-colors"
-                                        onClick={() => startEditing(memory)}
-                                    >
-                                        <Edit2 className="h-3 w-3" />
-                                    </Button>
-                                    <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-6 w-6 text-muted-foreground hover:text-destructive transition-colors"
-                                        onClick={() => handleDeleteMemory(memory.id)}
-                                    >
-                                        <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                </div>
+                                {canEdit && (
+                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 text-muted-foreground hover:text-primary transition-colors"
+                                            onClick={() => startEditing(memory)}
+                                        >
+                                            <Edit2 className="h-3 w-3" />
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-6 w-6 text-muted-foreground hover:text-destructive transition-colors"
+                                            onClick={() => handleDeleteMemory(memory.id)}
+                                        >
+                                            <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     ))}

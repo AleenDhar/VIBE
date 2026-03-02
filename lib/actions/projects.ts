@@ -61,8 +61,7 @@ export async function updateSystemPrompt(projectId: string, systemPrompt: string
     const { error } = await supabase
         .from("projects")
         .update({ system_prompt: systemPrompt })
-        .eq("id", projectId)
-        .eq("owner_id", user.id);
+        .eq("id", projectId);
 
     if (error) {
         console.error("Update System Prompt Error:", error);
