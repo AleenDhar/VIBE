@@ -113,7 +113,29 @@ export async function POST(req: NextRequest) {
             .single();
         const basePrompt = basePromptData?.value || "You are a helpful AI assistant.";
 
-        let systemPrompt = basePrompt;
+        // 2.5 Get User Profile Data
+        let userContextStr = `You are talking to an authenticated user with email: ${user.email}.`;
+        try {
+            const { data: profile } = await supabase
+                .from("profiles")
+                .select("full_name, role")
+                .eq("id", user.id)
+                .single();
+
+            if (profile) {
+                userContextStr = `You are currently talking to an authenticated user.
+User Details:
+- Name: ${profile.full_name || 'Unknown'}
+- Email: ${user.email}
+- Role/Permissions: ${profile.role || 'user'}
+
+Please use this context to personalize your responses.`;
+            }
+        } catch (e) {
+            console.error("Error fetching user profile for prompt context:", e);
+        }
+
+        let systemPrompt = `${basePrompt}\n\n## User Context\n${userContextStr}\n\n`;
 
         // 5. Get API Keys & Agent URL (we need them regardless of project_id, moved to top)
         const { data: configData } = await supabase
@@ -143,7 +165,10 @@ export async function POST(req: NextRequest) {
                     .select("system_prompt")
                     .eq("id", finalProjectId)
                     .single();
-                systemPrompt = `${basePrompt}\n\n${project?.system_prompt || ""}`;
+
+                if (project?.system_prompt) {
+                    systemPrompt += `\n\n## Project Context\n${project.system_prompt}`;
+                }
 
                 // 4. Get Project Memories
                 const { data: memories } = await supabase
