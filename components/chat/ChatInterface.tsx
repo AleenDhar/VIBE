@@ -15,6 +15,8 @@ import { extractFileContent } from "@/lib/extract-file-content";
 import { addDocument } from "@/lib/actions/documents";
 import { exportToPDF, exportToDocx } from "@/lib/export-utils";
 import { extractBehavioralInstructions } from "@/lib/actions/instructions";
+import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
+import { getCurrentUserRole } from "@/lib/actions/admin";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -217,6 +219,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "anthropic:claude-haiku-4-5");
+    const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);
     const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
@@ -264,6 +267,33 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             setExtractingMemory(false);
         }
     };
+
+    // Fetch permitted models
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) return;
+
+                const [models, allowed, role] = await Promise.all([
+                    getActiveModels(),
+                    getUserAllowedModels(user.id),
+                    getCurrentUserRole()
+                ]);
+
+                // Filter based on access
+                const filtered = models.filter(m =>
+                    m.is_available_to_all || allowed.includes(m.id)
+                );
+
+                setAvailableModels(filtered);
+            } catch (error) {
+                console.error("Error fetching models:", error);
+            }
+        };
+
+        fetchModels();
+    }, [supabase]);
 
     // Scroll to bottom on messages change
     useEffect(() => {
@@ -1557,39 +1587,19 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground px-2">
-                                    {model === "openai:gpt-5.2" && "GPT-5.2"}
-                                    {model === "google_genai:gemini-3-pro-preview" && "Gemini 3 Pro"}
-                                    {model === "google_genai:gemini-3-flash-preview" && "Gemini 3 Flash"}
-                                    {model === "openai:gpt-5-mini" && "GPT 5 Mini"}
-                                    {model === "anthropic:claude-haiku-4-5" && "Haiku 4.5"}
-                                    {model === "anthropic:claude-sonnet-4-5" && "Sonnet 4.5"}
-                                    {model === "anthropic:claude-sonnet-4-6" && "Sonnet 4.6"}
+                                    {availableModels.find(m => m.id === model)?.name || "Loading..."}
                                     <ChevronDown className="h-3 w-3 opacity-50" />
                                 </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3-pro-preview")}>
-                                    Gemini 3 Pro
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("google_genai:gemini-3-flash-preview")}>
-                                    Gemini 3 Flash
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("openai:gpt-5.2")}>
-                                    GPT 5.2
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("openai:gpt-5-mini")}>
-                                    GPT 5 Mini
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-haiku-4-5")}>
-                                    Haiku 4.5
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-5")}>
-                                    Sonnet 4.5
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setModel("anthropic:claude-sonnet-4-6")}>
-                                    Sonnet 4.6
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
+                            {availableModels.length > 0 && (
+                                <DropdownMenuContent align="end">
+                                    {availableModels.map(m => (
+                                        <DropdownMenuItem key={m.id} onClick={() => setModel(m.id)}>
+                                            {m.name}
+                                        </DropdownMenuItem>
+                                    ))}
+                                </DropdownMenuContent>
+                            )}
                         </DropdownMenu>
                         <Button
                             onClick={() => loading ? handleStop() : handleSend()}

@@ -21,16 +21,8 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const MODELS = [
-    { id: "anthropic:claude-haiku-4-5", label: "Haiku 4.5" },
-    { id: "anthropic:claude-sonnet-4-5", label: "Sonnet 4.5" },
-    { id: "anthropic:claude-sonnet-4-6", label: "Sonnet 4.6" },
-    { id: "google_genai:gemini-3-pro-preview", label: "Gemini 3 Pro" },
-    { id: "google_genai:gemini-3-flash-preview", label: "Gemini 3 Flash" },
-    { id: "openai:gpt-5.2", label: "GPT 5.2" },
-    { id: "openai:gpt-5-mini", label: "GPT 5 Mini" },
-    { id: "openai:gpt-5.4", label: "GPT 5.4" },
-];
+import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
+import { getCurrentUserRole } from "@/lib/actions/admin";
 
 interface Chat {
     id: string;
@@ -64,7 +56,8 @@ export function ProjectPageClient({
     const [chats, setChats] = useState<Chat[]>(initialChats);
     // const [loadingChat, setLoadingChat] = useState(false); // Removed
     const [inputValue, setInputValue] = useState("");
-    const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+    const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+    const [selectedModel, setSelectedModel] = useState<AIModel | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const [pendingImages, setPendingImages] = useState<string[]>([]);
@@ -187,7 +180,37 @@ export function ProjectPageClient({
         }
     };
 
-    // Removed useEffect for loading messages
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) return;
+
+                const [models, allowed, role] = await Promise.all([
+                    getActiveModels(),
+                    getUserAllowedModels(user.id),
+                    getCurrentUserRole()
+                ]);
+
+                // Filter based on access
+                const filtered = models.filter(m =>
+                    m.is_available_to_all || allowed.includes(m.id)
+                );
+
+                setAvailableModels(filtered);
+                if (filtered.length > 0) {
+                    // Try to restore previous choice, otherwise first available
+                    const savedModelId = sessionStorage.getItem('last_used_model');
+                    const savedModel = filtered.find(m => m.id === savedModelId);
+                    setSelectedModel(savedModel || filtered[0]);
+                }
+            } catch (error) {
+                console.error("Error fetching models:", error);
+            }
+        };
+
+        fetchModels();
+    }, [supabase]);
 
     const handleNewChat = async (initialMessage?: string) => {
         try {
@@ -202,7 +225,10 @@ export function ProjectPageClient({
                 if (pendingImages.length > 0) {
                     sessionStorage.setItem(`chat_initial_images_${result.id}`, JSON.stringify(pendingImages));
                 }
-                sessionStorage.setItem(`chat_model_${result.id}`, selectedModel.id);
+                if (selectedModel) {
+                    sessionStorage.setItem(`chat_model_${result.id}`, selectedModel.id);
+                    sessionStorage.setItem('last_used_model', selectedModel.id);
+                }
                 router.push(`/projects/${project.id}/chat/${result.id}`);
             }
         } catch (err) {
@@ -442,21 +468,23 @@ export function ProjectPageClient({
                                                         type="button"
                                                         className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 rounded-lg"
                                                     >
-                                                        {selectedModel.label}
+                                                        {selectedModel ? selectedModel.name : "Loading Models..."}
                                                         <ChevronDown className="h-3 w-3 opacity-50" />
                                                     </Button>
                                                 </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end" className="min-w-[160px]">
-                                                    {MODELS.map((m) => (
-                                                        <DropdownMenuItem
-                                                            key={m.id}
-                                                            onClick={() => setSelectedModel(m)}
-                                                            className={selectedModel.id === m.id ? "bg-accent" : ""}
-                                                        >
-                                                            {m.label}
-                                                        </DropdownMenuItem>
-                                                    ))}
-                                                </DropdownMenuContent>
+                                                {availableModels.length > 0 && (
+                                                    <DropdownMenuContent align="end" className="min-w-[160px]">
+                                                        {availableModels.map((m) => (
+                                                            <DropdownMenuItem
+                                                                key={m.id}
+                                                                onClick={() => setSelectedModel(m)}
+                                                                className={selectedModel?.id === m.id ? "bg-accent" : ""}
+                                                            >
+                                                                {m.name}
+                                                            </DropdownMenuItem>
+                                                        ))}
+                                                    </DropdownMenuContent>
+                                                )}
                                             </DropdownMenu>
                                             <Button
                                                 type="submit"

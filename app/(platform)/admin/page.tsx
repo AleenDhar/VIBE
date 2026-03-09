@@ -3,6 +3,7 @@ import { PromptEditor } from "@/components/admin/PromptEditor";
 import { ExtractionPromptEditor } from "@/components/admin/ExtractionPromptEditor";
 import { ApiKeyList } from "@/components/admin/ApiKeyList";
 import { UserList } from "@/components/admin/UserList";
+import { ModelManager } from "@/components/admin/ModelManager";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -73,6 +74,10 @@ export default async function AdminPage() {
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
                 <ApiKeyList initialKeys={apiKeys} />
+            </section>
+
+            <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
+                <ModelManager />
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
