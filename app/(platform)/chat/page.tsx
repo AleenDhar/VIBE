@@ -20,6 +20,7 @@ const MODELS = [
     { id: "google_genai:gemini-3-flash-preview", label: "Gemini 3 Flash" },
     { id: "openai:gpt-5.2", label: "GPT 5.2" },
     { id: "openai:gpt-5-mini", label: "GPT 5 Mini" },
+    { id: "openai:gpt-5.4", label: "GPT 5.4" },
 ];
 
 function getGreeting(): string {
