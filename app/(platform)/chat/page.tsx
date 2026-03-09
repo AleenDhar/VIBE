@@ -12,16 +12,11 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const MODELS = [
-    { id: "anthropic:claude-haiku-4-5", label: "Haiku 4.5" },
-    { id: "anthropic:claude-sonnet-4-5", label: "Sonnet 4.5" },
-    { id: "anthropic:claude-sonnet-4-6", label: "Sonnet 4.6" },
-    { id: "google_genai:gemini-3-pro-preview", label: "Gemini 3 Pro" },
-    { id: "google_genai:gemini-3-flash-preview", label: "Gemini 3 Flash" },
-    { id: "openai:gpt-5.2", label: "GPT 5.2" },
-    { id: "openai:gpt-5-mini", label: "GPT 5 Mini" },
-    { id: "openai:gpt-5.4", label: "GPT 5.4" },
-];
+import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
+import { getCurrentUserRole } from "@/lib/actions/admin";
+
+// Fallback initial model to prevent undefined errors before fetch completes
+const FALLBACK_MODEL = { id: "anthropic:claude-haiku-4-5", name: "Loading...", provider: "anthropic", is_available_to_all: true, is_active: true };
 
 function getGreeting(): string {
     const hour = new Date().getHours();
@@ -52,7 +47,8 @@ export default function ChatHomePage() {
     const [inputValue, setInputValue] = useState("");
     const [userName, setUserName] = useState("");
     const [submitting, setSubmitting] = useState(false);
-    const [selectedModel, setSelectedModel] = useState(MODELS[0]);
+    const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+    const [selectedModel, setSelectedModel] = useState<AIModel | typeof FALLBACK_MODEL>(FALLBACK_MODEL);
     const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
 
     useEffect(() => {
@@ -69,6 +65,28 @@ export default function ChatHomePage() {
                     setUserName(profile.full_name.split(" ")[0]);
                 } else {
                     setUserName(user.email?.split("@")[0] || "");
+                }
+
+                // Fetch models based on permissions
+                try {
+                    const [models, allowed, role] = await Promise.all([
+                        getActiveModels(),
+                        getUserAllowedModels(user.id),
+                        getCurrentUserRole()
+                    ]);
+
+                    const filtered = models.filter(m =>
+                        m.is_available_to_all || allowed.includes(m.id)
+                    );
+
+                    setAvailableModels(filtered);
+                    if (filtered.length > 0) {
+                        const savedModelId = sessionStorage.getItem('last_used_model');
+                        const savedModel = filtered.find(m => m.id === savedModelId);
+                        setSelectedModel(savedModel || filtered[0]);
+                    }
+                } catch (err) {
+                    console.error("Failed to load models:", err);
                 }
             }
         };
@@ -228,21 +246,26 @@ export default function ChatHomePage() {
                                             type="button"
                                             className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 rounded-lg"
                                         >
-                                            {selectedModel.label}
+                                            {selectedModel.name}
                                             <ChevronDown className="h-3 w-3 opacity-50" />
                                         </Button>
                                     </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="min-w-[160px]">
-                                        {MODELS.map((m) => (
-                                            <DropdownMenuItem
-                                                key={m.id}
-                                                onClick={() => setSelectedModel(m)}
-                                                className={selectedModel.id === m.id ? "bg-accent" : ""}
-                                            >
-                                                {m.label}
-                                            </DropdownMenuItem>
-                                        ))}
-                                    </DropdownMenuContent>
+                                    {availableModels.length > 0 && (
+                                        <DropdownMenuContent align="end" className="min-w-[160px]">
+                                            {availableModels.map((m) => (
+                                                <DropdownMenuItem
+                                                    key={m.id}
+                                                    onClick={() => {
+                                                        setSelectedModel(m);
+                                                        sessionStorage.setItem('last_used_model', m.id);
+                                                    }}
+                                                    className={selectedModel.id === m.id ? "bg-accent" : ""}
+                                                >
+                                                    {m.name}
+                                                </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuContent>
+                                    )}
                                 </DropdownMenu>
 
                                 {/* Submit */}

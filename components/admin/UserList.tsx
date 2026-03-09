@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { updateUserRole } from "@/lib/actions/admin";
-import { User, ShieldCheck, Crown, Mail } from "lucide-react";
+import { updateUserRole, updateUserAllowedModels } from "@/lib/actions/admin";
+import { User, ShieldCheck, Crown, Mail, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
 
 interface UserProfile {
     id: string;
@@ -14,7 +16,49 @@ interface UserProfile {
 
 export function UserList({ initialUsers, currentUserRole }: { initialUsers: UserProfile[]; currentUserRole: string | null }) {
     const [users, setUsers] = useState(initialUsers);
+    const [selectedUserForModels, setSelectedUserForModels] = useState<string | null>(null);
+    const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+    const [userAllowedModels, setUserAllowedModels] = useState<string[]>([]);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
     const isSuperAdmin = currentUserRole === 'super_admin';
+
+    // Fetch models and user access when opening modal
+    const handleManageModels = async (userId: string) => {
+        setSelectedUserForModels(userId);
+        setIsLoadingModels(true);
+        try {
+            const [models, allowed] = await Promise.all([
+                getActiveModels(),
+                getUserAllowedModels(userId)
+            ]);
+            setAvailableModels(models);
+            setUserAllowedModels(allowed);
+        } catch (error) {
+            console.error("Failed to load models data:", error);
+            alert("Failed to load models data.");
+        } finally {
+            setIsLoadingModels(false);
+        }
+    };
+
+    const handleSaveModels = async () => {
+        if (!selectedUserForModels) return;
+        setIsLoadingModels(true);
+        try {
+            const result = await updateUserAllowedModels(selectedUserForModels, userAllowedModels);
+            if (result.success) {
+                alert("✅ Model permissions updated successfully!");
+                setSelectedUserForModels(null);
+            } else {
+                alert("❌ Failed to update model permissions: " + result.error);
+            }
+        } catch (error) {
+            console.error("Failed to save models:", error);
+            alert("Failed to save changes.");
+        } finally {
+            setIsLoadingModels(false);
+        }
+    };
 
     const handleRoleChange = async (userId: string, newRole: 'admin' | 'user' | 'super_admin') => {
         const result = await updateUserRole(userId, newRole);
@@ -82,6 +126,15 @@ export function UserList({ initialUsers, currentUserRole }: { initialUsers: User
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="mr-2"
+                                onClick={() => handleManageModels(user.id)}
+                            >
+                                <Cpu className="h-4 w-4 mr-2" />
+                                Models
+                            </Button>
                             {/* Role change buttons */}
                             {user.role === 'user' && (
                                 <>
@@ -140,6 +193,59 @@ export function UserList({ initialUsers, currentUserRole }: { initialUsers: User
                     </div>
                 ))}
             </div>
+
+            {/* Model Management Modal */}
+            <Dialog open={selectedUserForModels !== null} onOpenChange={(open) => !open && setSelectedUserForModels(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Manage Models for {users.find(u => u.id === selectedUserForModels)?.full_name}</DialogTitle>
+                    </DialogHeader>
+                    <div className="py-4 space-y-4">
+                        {isLoadingModels ? (
+                            <p className="text-sm text-muted-foreground">Loading models...</p>
+                        ) : availableModels.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No active models found in database.</p>
+                        ) : (
+                            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+                                {availableModels.map(model => (
+                                    <div key={model.id} className="flex items-start flex-col gap-1 p-3 border rounded-md">
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="checkbox"
+                                                id={`model-${model.id}`}
+                                                className="h-4 w-4 rounded border-gray-300"
+                                                checked={model.is_available_to_all || userAllowedModels.includes(model.id)}
+                                                disabled={model.is_available_to_all} // Can't uncheck globally available modes
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setUserAllowedModels(prev => [...prev, model.id]);
+                                                    } else {
+                                                        setUserAllowedModels(prev => prev.filter(id => id !== model.id));
+                                                    }
+                                                }}
+                                            />
+                                            <label htmlFor={`model-${model.id}`} className="font-medium text-sm flex items-center gap-2">
+                                                {model.name}
+                                                {model.is_available_to_all && (
+                                                    <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">Available to All</span>
+                                                )}
+                                                {!model.is_available_to_all && (
+                                                    <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Restricted</span>
+                                                )}
+                                            </label>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground ml-6">ID: <code className="bg-muted px-1 rounded">{model.id}</code></p>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="flex justify-end pt-4 gap-2">
+                            <Button variant="outline" onClick={() => setSelectedUserForModels(null)}>Cancel</Button>
+                            <Button onClick={handleSaveModels} disabled={isLoadingModels}>Save Permissions</Button>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

@@ -313,3 +313,54 @@ export async function updateApiKey(key: string, value: string) {
     revalidatePath("/admin");
     return { success: true };
 }
+
+// 5. Update user allowed models (Admin Management)
+export async function updateUserAllowedModels(userId: string, allowedModels: string[]) {
+    // Needs security check in the upstream action (admin.ts)
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) {
+        return { success: false, error: "Unauthorized: Admins only." };
+    }
+
+    const supabase = await createClient();
+
+    // We update via rpc or just direct if RLS allows admin access
+    const { error } = await supabase
+        .from('profiles')
+        .update({ allowed_models: allowedModels })
+        .eq('id', userId);
+
+    if (error) {
+        return { success: false, error: error.message };
+    }
+
+    revalidatePath("/admin");
+    return { success: true };
+}
+
+// 6. Update global model availability (Admin Management)
+export async function updateModelAvailability(modelId: string, isAvailableToAll: boolean, isActive: boolean = true) {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) {
+        return { success: false, error: "Unauthorized: Admins only." };
+    }
+
+    const supabase = await createClient();
+
+    const { error } = await supabase
+        .from('ai_models')
+        .update({
+            is_available_to_all: isAvailableToAll,
+            is_active: isActive,
+            updated_at: new Date().toISOString()
+        })
+        .eq('id', modelId);
+
+    if (error) {
+        console.error("Error updating model availability:", error);
+        return { success: false, error: error.message };
+    }
+
+    revalidatePath("/admin");
+    return { success: true };
+}

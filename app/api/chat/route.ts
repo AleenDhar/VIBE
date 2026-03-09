@@ -113,21 +113,26 @@ export async function POST(req: NextRequest) {
             .single();
         const basePrompt = basePromptData?.value || "You are a helpful AI assistant.";
 
-        // 2.5 Get User Profile Data
+        // 2.5 Get User Profile Data and Allowed Models
         let userContextStr = `You are talking to an authenticated user with email: ${user.email}.`;
+        let userRole = 'user';
+        let allowedModels: string[] = [];
+
         try {
             const { data: profile } = await supabase
                 .from("profiles")
-                .select("full_name, role")
+                .select("full_name, role, allowed_models")
                 .eq("id", user.id)
                 .single();
 
             if (profile) {
+                userRole = profile.role || 'user';
+                allowedModels = profile.allowed_models || [];
                 userContextStr = `You are currently talking to an authenticated user.
 User Details:
 - Name: ${profile.full_name || 'Unknown'}
 - Email: ${user.email}
-- Role/Permissions: ${profile.role || 'user'}
+- Role/Permissions: ${userRole}
 
 Please use this context to personalize your responses.`;
             }
@@ -136,6 +141,35 @@ Please use this context to personalize your responses.`;
         }
 
         let systemPrompt = `${basePrompt}\n\n## User Context\n${userContextStr}\n\n`;
+
+        // 2.6 Enforce Model Access Permissions
+        let finalModel = model || "anthropic:claude-haiku-4-5"; // Default fallback
+
+        try {
+            // 1. Fetch the requested model from the database to check its properties
+            const { data: requestedModelData } = await supabase
+                .from("ai_models")
+                .select("id, is_available_to_all, is_active")
+                .eq("id", finalModel)
+                .single();
+
+            if (!requestedModelData || !requestedModelData.is_active) {
+                console.warn(`[API] Requested model ${finalModel} is invalid or inactive.`);
+                return NextResponse.json({ error: `Model ${finalModel} is unavailable or inactive.` }, { status: 400 });
+            } else {
+                // Check if the user is allowed to use this specific model
+                const isAvailableToAll = requestedModelData.is_available_to_all;
+                const isExplicitlyAllowed = allowedModels.includes(finalModel);
+
+                if (!isAvailableToAll && !isExplicitlyAllowed) {
+                    console.warn(`[API] User ${user.id} denied access to restricted model ${finalModel}.`);
+                    return NextResponse.json({ error: `You do not have permission to use this model.` }, { status: 403 });
+                }
+            }
+        } catch (e) {
+            console.error("Error validating model access:", e);
+        }
+
 
         // 5. Get API Keys & Agent URL (we need them regardless of project_id, moved to top)
         const { data: configData } = await supabase
@@ -268,7 +302,7 @@ Please use this context to personalize your responses.`;
         const payload = {
             messages: messagesPayload,
             system_prompt: systemPrompt,
-            model: model || "anthropic:claude-haiku-4-5", // User preference from chat.ts
+            model: finalModel, // Enforced model from Permission Checks
             stream: true,
             chat_id: chatId, // Pass chat_id so server can log directly to DB
             project_id: finalProjectId,
