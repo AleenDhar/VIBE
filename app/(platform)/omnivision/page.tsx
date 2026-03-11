@@ -1,4 +1,4 @@
-import { verifySuperAdmin, getAllChatsWithUsers } from "@/lib/actions/admin";
+import { verifySuperAdmin, getOmnivisionUserAggregates } from "@/lib/actions/admin";
 import { redirect } from "next/navigation";
 import { OmnivisionDashboard } from "@/components/admin/OmnivisionDashboard";
 
@@ -11,7 +11,7 @@ export default async function OmnivisionPage() {
         redirect("/");
     }
 
-    const allChats = await getAllChatsWithUsers();
+    const initialAggregates = await getOmnivisionUserAggregates();
 
-    return <OmnivisionDashboard initialChats={allChats} />;
+    return <OmnivisionDashboard initialAggregates={initialAggregates} />;
 }
