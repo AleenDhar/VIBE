@@ -225,6 +225,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
+    const [showScrollButton, setShowScrollButton] = useState(false);
+    const userScrolledUp = useRef(false);
     const router = useRouter();
     // Refs
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -295,9 +297,37 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         fetchModels();
     }, [supabase]);
 
+    // Check if user has scrolled up
+    const handleScroll = () => {
+        if (!scrollRef.current) return;
+        
+        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+        // Make the threshold bigger to be more forgiving for dynamic content
+        const isAtBottom = Math.abs(scrollHeight - scrollTop - clientHeight) < 150; 
+        
+        // Use synchronous ref to prevent race conditions with rapidly streaming messages
+        userScrolledUp.current = !isAtBottom;
+        
+        // Show/hide floating button
+        if (!isAtBottom && !showScrollButton) {
+            setShowScrollButton(true);
+        } else if (isAtBottom && showScrollButton) {
+            setShowScrollButton(false);
+        }
+    };
+    
+    // Explicit scroll to bottom handler
+    const scrollToBottomAndResume = () => {
+        if (scrollRef.current) {
+            userScrolledUp.current = false;
+            setShowScrollButton(false);
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    };
+
     // Scroll to bottom on messages change
     useEffect(() => {
-        if (scrollRef.current) {
+        if (scrollRef.current && !userScrolledUp.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages, loading]);
@@ -645,6 +675,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         setInput("");
         setLoading(true);
         setThinkingText("Thinking...");
+        userScrolledUp.current = false; // Force scroll to bottom when user sends a message
+        setShowScrollButton(false);
 
         // Placeholder for assistant message
         const assistantMsgId = uuid();
@@ -1096,7 +1128,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 </div>
             )}
 
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" ref={scrollRef}>
+            <div 
+                className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-6 w-full max-w-screen" 
+                ref={scrollRef}
+                onScroll={handleScroll}
+            >
                 {messages.length === 0 && (
                     <div className="flex h-full items-center justify-center text-muted-foreground opacity-50 px-4 text-center flex-col gap-2">
                         <div className="p-4 rounded-full bg-muted/50">
@@ -1484,6 +1520,19 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
                 <div className="h-4" /> {/* Spacer */}
             </div>
+
+            {/* Scroll to Bottom Button */}
+            {showScrollButton && (
+                <div className="absolute bottom-[90px] md:bottom-[110px] left-0 right-0 flex justify-center pointer-events-none z-10">
+                    <button
+                        onClick={scrollToBottomAndResume}
+                        className="pointer-events-auto flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border shadow-lg rounded-full px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-all duration-200 animate-in fade-in slide-in-from-bottom-2"
+                    >
+                        <ChevronDown className="h-4 w-4" />
+                        <span>New messages</span>
+                    </button>
+                </div>
+            )}
 
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
                 <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all flex flex-col">
