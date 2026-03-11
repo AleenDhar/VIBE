@@ -143,8 +143,29 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
             })
             .subscribe();
 
+        // Start listening to the profile changes once we get the user ID
+        let profileChannel: any = null;
+        supabase.auth.getUser().then(({ data: { user } }) => {
+            if (user) {
+                profileChannel = supabase
+                    .channel('sidebar_profile_updates')
+                    .on('postgres_changes', {
+                        event: 'UPDATE',
+                        schema: 'public',
+                        table: 'profiles',
+                        filter: `id=eq.${user.id}`
+                    }, () => {
+                        fetchData();
+                    })
+                    .subscribe();
+            }
+        });
+
         return () => {
             supabase.removeChannel(channel);
+            if (profileChannel) {
+                supabase.removeChannel(profileChannel);
+            }
         };
     }, []);
 
