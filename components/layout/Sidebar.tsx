@@ -207,16 +207,6 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
         }
     }, []);
 
-    const handleDeleteChat = useCallback(async (chatId: string) => {
-        setOpenDropdownId(null);
-        const { error } = await supabase.from("chats").delete().eq("id", chatId);
-        if (error) {
-            console.error("Failed to delete chat:", error);
-        } else {
-            setRecentChats(prev => prev.filter(c => c.id !== chatId));
-        }
-    }, [supabase]);
-
     const userInitial = userProfile?.full_name
         ? userProfile.full_name.charAt(0).toUpperCase()
         : userProfile?.email?.charAt(0).toUpperCase() || "?";
@@ -289,18 +279,6 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                     : "text-muted-foreground/70"
                             )} />
                             <span>{chat.is_starred ? "Unstar" : "Star"}</span>
-                        </button>
-                        <div className="my-1 h-px bg-border/20 mx-2" />
-                        <button
-                            className="flex w-full items-center gap-2.5 px-3 py-2 text-[13px] text-red-400 hover:bg-red-500/10 transition-colors rounded-sm mx-0.5"
-                            onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                handleDeleteChat(chat.id);
-                            }}
-                        >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            <span>Delete</span>
                         </button>
                     </div>
                 )}
