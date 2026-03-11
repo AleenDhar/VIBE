@@ -3,11 +3,12 @@
 import { useState } from "react";
 import {
     Eye, Search, MessageSquare, User, ChevronDown, ChevronRight,
-    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox,
+    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { UserAggregate, getOmnivisionChatsForUser } from "@/lib/actions/admin";
 
 interface OmnivisionChat {
     id: string;
@@ -31,64 +32,27 @@ interface ProjectGroup {
     chats: OmnivisionChat[];
 }
 
-interface UserGroup {
-    user_id: string;
-    full_name: string;
-    role: string | null;
-    avatar_url: string | null;
-    chatCount: number;
-    projects: ProjectGroup[];
+interface UserState extends UserAggregate {
+    isLoaded?: boolean;
+    isLoading?: boolean;
+    projects?: ProjectGroup[];
 }
 
-export function OmnivisionDashboard({ initialChats }: { initialChats: OmnivisionChat[] }) {
+export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: UserAggregate[] }) {
     const [searchQuery, setSearchQuery] = useState("");
     const [filterRole, setFilterRole] = useState("all");
     const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
     const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
-    // ── Build User → Project → Chat tree ──────────────────────────────────
-    const userMap: Record<string, UserGroup> = {};
-
-    for (const chat of initialChats) {
-        const uid = chat.user_id ?? "unknown";
-        if (!userMap[uid]) {
-            userMap[uid] = {
-                user_id: uid,
-                full_name: chat.profiles?.full_name || "Unknown User",
-                role: chat.profiles?.role || "user",
-                avatar_url: chat.profiles?.avatar_url || null,
-                chatCount: 0,
-                projects: [],
-            };
+    const [users, setUsers] = useState<Record<string, UserState>>(() => {
+        const init: Record<string, UserState> = {};
+        for (const u of initialAggregates) {
+            init[u.user_id] = { ...u, projects: [] };
         }
-        const user = userMap[uid];
-        user.chatCount++;
+        return init;
+    });
 
-        // find or create project bucket
-        const projKey = chat.project_id ?? "__direct__";
-        let projGroup = user.projects.find(p => (p.project_id ?? "__direct__") === projKey);
-        if (!projGroup) {
-            projGroup = {
-                project_id: chat.project_id,
-                project_name: chat.project_name ?? (chat.project_id ? `Project ${chat.project_id.substring(0, 8)}...` : "Direct Chats"),
-                chats: [],
-            };
-            user.projects.push(projGroup);
-        }
-        projGroup.chats.push(chat);
-    }
-
-    // sort users by chat count desc; sort each user's projects (direct last)
-    const allUsers: UserGroup[] = Object.values(userMap)
-        .sort((a, b) => b.chatCount - a.chatCount)
-        .map(u => ({
-            ...u,
-            projects: u.projects.sort((a, b) => {
-                if (!a.project_id) return 1;
-                if (!b.project_id) return -1;
-                return b.chats.length - a.chats.length;
-            }),
-        }));
+    const allUsers = Object.values(users).sort((a, b) => Number(b.chat_count) - Number(a.chat_count));
 
     // ── Filtering ────────────────────────────────────────────────────────
     const lq = searchQuery.toLowerCase();
@@ -96,24 +60,78 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
         const matchesRole = filterRole === "all" || user.role === filterRole;
         if (!matchesRole) return false;
         if (!lq) return true;
-        return (
-            user.full_name.toLowerCase().includes(lq) ||
-            user.projects.some(p =>
+        
+        // Match user details
+        if (
+            (user.full_name || "").toLowerCase().includes(lq) ||
+            (user.username || "").toLowerCase().includes(lq) ||
+            (user.role || "").toLowerCase().includes(lq)
+        ) {
+            return true;
+        }
+
+        // Match loaded projects and chats if they exist
+        if (user.isLoaded && user.projects) {
+            return user.projects.some(p =>
                 (p.project_name || "").toLowerCase().includes(lq) ||
                 p.chats.some(c => (c.title || "").toLowerCase().includes(lq))
-            )
-        );
+            );
+        }
+
+        return false;
     });
 
-    const totalChats = initialChats.length;
-    const totalUsers = allUsers.length;
+    const totalUsers = initialAggregates.length;
+    const totalChats = initialAggregates.reduce((acc, curr) => acc + Number(curr.chat_count), 0);
 
     // ── Toggle helpers ───────────────────────────────────────────────────
-    const toggleUser = (uid: string) => setExpandedUsers(prev => {
-        const next = new Set(prev);
-        next.has(uid) ? next.delete(uid) : next.add(uid);
-        return next;
-    });
+    const toggleUser = async (uid: string) => {
+        setExpandedUsers(prev => {
+            const next = new Set(prev);
+            if (next.has(uid)) {
+                next.delete(uid);
+            } else {
+                next.add(uid);
+            }
+            return next;
+        });
+
+        // Fetch user chats if not loaded
+        if (!users[uid].isLoaded && !users[uid].isLoading) {
+            setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], isLoading: true } }));
+
+            try {
+                const fetchedChats = await getOmnivisionChatsForUser(uid);
+
+                const pGroups: Record<string, ProjectGroup> = {};
+                for (const chat of fetchedChats) {
+                    const pKey = chat.project_id || "__direct__";
+                    if (!pGroups[pKey]) {
+                        pGroups[pKey] = {
+                            project_id: chat.project_id,
+                            project_name: chat.project_name ?? (chat.project_id ? `Project ${chat.project_id.substring(0, 8)}...` : "Direct Chats"),
+                            chats: [],
+                        };
+                    }
+                    pGroups[pKey].chats.push(chat as any);
+                }
+
+                const sortedProjects = Object.values(pGroups).sort((a, b) => {
+                    if (!a.project_id) return 1;
+                    if (!b.project_id) return -1;
+                    return b.chats.length - a.chats.length;
+                });
+
+                setUsers(prev => ({
+                    ...prev,
+                    [uid]: { ...prev[uid], isLoaded: true, isLoading: false, projects: sortedProjects }
+                }));
+            } catch (err) {
+                console.error("Failed to load user chats", err);
+                setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], isLoading: false } }));
+            }
+        }
+    };
 
     const toggleProject = (key: string) => setExpandedProjects(prev => {
         const next = new Set(prev);
@@ -121,7 +139,6 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
         return next;
     });
 
-    // chat link helper
     const chatHref = (chat: OmnivisionChat) =>
         chat.project_id
             ? `/projects/${chat.project_id}/chat/${chat.id}`
@@ -129,7 +146,6 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
 
     const isLive = (chat: OmnivisionChat) => chat.last_msg_type === "processing" || chat.last_msg_type === "status";
 
-    // Live badge
     const LiveBadge = () => (
         <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 font-medium leading-none flex-shrink-0">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -137,25 +153,15 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
         </span>
     );
 
-    // ── Role badge ───────────────────────────────────────────────────────
     const RoleBadge = ({ role }: { role: string | null }) => {
         if (role === "super_admin")
-            return (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 font-semibold leading-none">
-                    ⚡ SUPER
-                </span>
-            );
+            return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/30 font-semibold leading-none">⚡ SUPER</span>;
         if (role === "admin")
-            return (
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 leading-none">
-                    ADMIN
-                </span>
-            );
+            return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30 leading-none">ADMIN</span>;
         return null;
     };
 
-    // ── Avatar ───────────────────────────────────────────────────────────
-    const Avatar = ({ user }: { user: UserGroup }) => (
+    const Avatar = ({ user }: { user: UserState }) => (
         <div className={cn(
             "h-9 w-9 rounded-full flex items-center justify-center text-sm font-semibold flex-shrink-0 overflow-hidden",
             user.role === "super_admin"
@@ -166,7 +172,7 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
         )}>
             {user.avatar_url
                 ? <img src={user.avatar_url} alt="" className="h-full w-full object-cover" />
-                : user.full_name.charAt(0).toUpperCase()
+                : (user.full_name || user.username || "?").charAt(0).toUpperCase()
             }
         </div>
     );
@@ -218,7 +224,7 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
                             <input
                                 type="text"
-                                placeholder="Search users, projects, chats…"
+                                placeholder="Search users or loaded chats…"
                                 value={searchQuery}
                                 onChange={e => setSearchQuery(e.target.value)}
                                 className="w-full bg-muted/30 border border-border/20 rounded-xl py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-muted-foreground/30"
@@ -266,20 +272,24 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
                                         <Avatar user={user} />
                                         <div className="min-w-0">
                                             <p className="font-medium text-sm flex items-center gap-2 flex-wrap">
-                                                {user.full_name}
+                                                {user.full_name || user.username || "Unknown User"}
                                                 <RoleBadge role={user.role} />
                                             </p>
                                             <p className="text-xs text-muted-foreground/50 mt-0.5">
-                                                {user.chatCount} chat{user.chatCount !== 1 ? "s" : ""}
+                                                {user.chat_count} chat{user.chat_count !== 1 ? "s" : ""}
                                                 {" · "}
-                                                {user.projects.filter(p => p.project_id).length} project{user.projects.filter(p => p.project_id).length !== 1 ? "s" : ""}
+                                                {user.project_count} project{user.project_count !== 1 ? "s" : ""}
                                             </p>
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                                        <span className="text-xs bg-muted/60 text-muted-foreground px-2 py-0.5 rounded-md">
-                                            {user.chatCount}
-                                        </span>
+                                        {user.isLoading ? (
+                                            <Loader2 className="h-4 w-4 text-amber-500 animate-spin mr-2" />
+                                        ) : (
+                                            <span className="text-xs bg-muted/60 text-muted-foreground px-2 py-0.5 rounded-md">
+                                                {user.chat_count}
+                                            </span>
+                                        )}
                                         {userExpanded
                                             ? <ChevronDown className="h-4 w-4 text-muted-foreground/40" />
                                             : <ChevronRight className="h-4 w-4 text-muted-foreground/40" />
@@ -288,9 +298,13 @@ export function OmnivisionDashboard({ initialChats }: { initialChats: Omnivision
                                 </button>
 
                                 {/* ── Expanded: project groups ───────────── */}
-                                {userExpanded && (
+                                {userExpanded && user.isLoaded && user.projects && (
                                     <div className="border-t border-border/20 divide-y divide-border/10 bg-background/40">
-                                        {user.projects.map(proj => {
+                                        {user.projects.length === 0 ? (
+                                            <div className="py-8 text-center text-sm text-muted-foreground/60">
+                                                No chats found
+                                            </div>
+                                        ) : user.projects.map(proj => {
                                             const projKey = `${user.user_id}-${proj.project_id ?? "direct"}`;
                                             const projExpanded = expandedProjects.has(projKey);
                                             const isDirect = !proj.project_id;

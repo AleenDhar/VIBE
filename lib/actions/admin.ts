@@ -180,68 +180,86 @@ export async function updateUserRole(userId: string, newRole: 'admin' | 'user' |
     return { success: true };
 }
 
-// 5. Get ALL chats with user info + project name (Super Admin Omnivision)
-export async function getAllChatsWithUsers() {
+// 5. Get User Aggregates for Omnivision
+export interface UserAggregate {
+    user_id: string;
+    username: string | null;
+    full_name: string | null;
+    avatar_url: string | null;
+    role: string | null;
+    chat_count: number;
+    project_count: number;
+}
+
+export async function getOmnivisionUserAggregates() {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
 
     const supabase = await createClient();
 
-    // Fetch all chats, skip those with no owner (they'd show as Unknown User)
+    const { data, error } = await supabase
+        .rpc("get_omnivision_user_aggregates")
+        .order("chat_count", { ascending: false })
+        .limit(2000);
+
+    if (error) {
+        console.error("Error fetching user aggregates:", error);
+        return [];
+    }
+    
+    // Default null texts to empty to match expected format
+    return (data || []) as UserAggregate[];
+}
+
+// 5b. Get chats for a specific user on-demand
+export async function getOmnivisionChatsForUser(targetUserId: string) {
+    const isSuperAdmin = await verifySuperAdmin();
+    if (!isSuperAdmin) return [];
+
+    const supabase = await createClient();
+
+    // Fetch all chats for this user (up to 1000 for safety)
     const { data: chats, error: chatsError } = await supabase
         .from("chats")
         .select("id, title, created_at, updated_at, project_id, user_id")
-        .not("user_id", "is", null)
-        .order("created_at", { ascending: false });
+        .eq("user_id", targetUserId)
+        .order("created_at", { ascending: false })
+        .limit(1000);
 
     if (chatsError) {
-        console.error("Error fetching all chats:", chatsError);
+        console.error("Error fetching chats for user:", chatsError);
         return [];
     }
 
-    // Fetch ALL profiles via security-definer RPC (same pattern as projects, bypasses RLS)
-    const { data: profiles, error: profilesError } = await supabase
-        .rpc("get_all_profiles_for_admin");
+    // Fetch the target user's profile
+    const { data: profileData } = await supabase
+        .from("profiles")
+        .select("full_name, role, avatar_url")
+        .eq("id", targetUserId)
+        .single();
 
-    if (profilesError) {
-        console.error("Error fetching profiles via RPC:", profilesError);
-    }
-
-    // Fetch ALL projects via security-definer RPC (bypasses RLS so names always resolve)
+    // Fetch ALL projects via security-definer RPC to resolve names
     const { data: projects, error: projError } = await supabase
         .rpc("get_all_projects_for_admin");
-
-    if (projError) {
-        console.error("Error fetching projects via RPC:", projError);
-    }
-
-    // Fetch last message type per chat (to show live/done status)
-    const { data: lastStatuses } = await supabase
-        .rpc("get_chat_last_statuses");
-
-    // Build lookup maps
-    const profileMap: Record<string, any> = {};
-    (profiles || []).forEach((p: { id: string; full_name: string; role: string; avatar_url: string }) => {
-        profileMap[p.id] = p;
-    });
 
     const projectMap: Record<string, string> = {};
     (projects || []).forEach((p: { id: string; name: string }) => { projectMap[p.id] = p.name; });
 
+    // Fetch last message type per chat for live status
+    const { data: lastStatuses } = await supabase.rpc("get_chat_last_statuses");
     const lastStatusMap: Record<string, string> = {};
     (lastStatuses || []).forEach((s: { chat_id: string; last_type: string }) => {
         lastStatusMap[s.chat_id] = s.last_type;
     });
 
-    // Merge — only chats with a valid profile are included
-    return (chats || [])
-        .filter(chat => profileMap[chat.user_id])
-        .map(chat => ({
+    return (chats || []).map(chat => {
+        return {
             ...chat,
             project_name: chat.project_id ? (projectMap[chat.project_id] ?? null) : null,
             last_msg_type: lastStatusMap[chat.id] ?? null,
-            profiles: profileMap[chat.user_id],
-        }));
+            profiles: profileData || null,
+        };
+    });
 }
 
 // 6. Get chat messages for omnivision
