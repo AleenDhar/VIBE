@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { motion, AnimatePresence } from "framer-motion";
@@ -8,12 +9,21 @@ import { Mail, Lock, ArrowRight, Loader2 } from "lucide-react";
 import { loginWithEmail, signUpWithEmail, resetPasswordForEmail } from "@/app/auth/actions";
 
 export function EmailAuth() {
+    const searchParams = useSearchParams();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [mode, setMode] = useState<"signin" | "signup" | "reset">("signin");
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
+
+    useEffect(() => {
+        const urlError = searchParams.get("error");
+        if (urlError) {
+            setError(urlError);
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+    }, [searchParams]);
 
     const handleEmailAuth = async (e: React.FormEvent) => {
         e.preventDefault();

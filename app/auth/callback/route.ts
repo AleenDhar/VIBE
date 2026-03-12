@@ -5,8 +5,18 @@ import { createClient } from '@/lib/supabase/server'
 export async function GET(request: Request) {
     const { searchParams, origin } = new URL(request.url)
     const code = searchParams.get('code')
+    const errorParam = searchParams.get('error')
+    const errorDescription = searchParams.get('error_description')
+
     // if "next" is in param, use it as the redirect URL
     const next = searchParams.get('next') ?? '/projects'
+
+    if (errorParam) {
+        const forwardedHost = request.headers.get('x-forwarded-host')
+        const isLocalEnv = process.env.NODE_ENV === 'development'
+        const base = isLocalEnv ? origin : (forwardedHost ? `https://${forwardedHost}` : origin);
+        return NextResponse.redirect(`${base}/?error=${encodeURIComponent(errorDescription || 'Authentication error')}`);
+    }
 
     if (code) {
         const supabase = await createClient()
