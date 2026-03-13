@@ -2,7 +2,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { FolderOpen, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { FolderOpen, Loader2, CheckCircle2, XCircle, Cpu } from "lucide-react";
 
 type NodeStatus = "idle" | "running" | "completed" | "failed";
 
@@ -10,6 +10,8 @@ function ProjectNodeComponent({ data, selected }: NodeProps) {
     const nodeData = data as any;
     const status: NodeStatus = nodeData.status || "idle";
     const projectName = nodeData.projectName || "Select Project";
+    const modelId: string = nodeData.model || "anthropic:claude-haiku-4-5";
+    const modelLabel = nodeData.modelName || modelId.split(":").pop()?.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) || modelId;
 
     const statusStyles: Record<NodeStatus, string> = {
         idle: selected ? "border-primary shadow-lg shadow-primary/20" : "border-border dark:border-border",
@@ -59,6 +61,10 @@ function ProjectNodeComponent({ data, selected }: NodeProps) {
                     ID: {nodeData.projectId}
                 </p>
             )}
+            <div className="flex items-center gap-1 mt-1.5">
+                <Cpu className="h-2.5 w-2.5 text-muted-foreground" />
+                <p className="text-[10px] text-muted-foreground truncate">{modelLabel}</p>
+            </div>
             <Handle
                 type="source"
                 position={Position.Bottom}
