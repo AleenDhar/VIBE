@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout -b feature/workflows)",
+      "Bash(npm install @xyflow/react)",
+      "Bash(npm run build)",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__mcp-registry__search_mcp_registry",
+      "WebFetch(domain:supabase.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(npx -y @supabase/mcp-server-supabase@latest --help)",
+      "mcp__supabase__list_projects",
+      "mcp__supabase__apply_migration",
+      "mcp__supabase__execute_sql",
+      "Bash(npx tsc:*)",
+      "Bash(npx next:*)",
+      "Bash(xargs grep:*)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp"
+    ]
+  }
+}
