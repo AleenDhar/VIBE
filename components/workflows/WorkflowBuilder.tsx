@@ -48,6 +48,14 @@ interface Project {
     description: string | null;
 }
 
+interface AIModel {
+    id: string;
+    name: string;
+    provider: string;
+    is_available_to_all: boolean;
+    is_active: boolean;
+}
+
 interface WorkflowBuilderProps {
     workflow: {
         id: string;
@@ -60,6 +68,7 @@ interface WorkflowBuilderProps {
         schedule_timezone?: string | null;
     };
     projects: Project[];
+    models: AIModel[];
 }
 
 interface NodeLog {
@@ -74,7 +83,7 @@ interface NodeLog {
     aiSummary?: string;
 }
 
-export function WorkflowBuilder({ workflow, projects }: WorkflowBuilderProps) {
+export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState(
         workflow.definition?.nodes || []
     );
@@ -600,6 +609,42 @@ export function WorkflowBuilder({ workflow, projects }: WorkflowBuilderProps) {
                                     <p className="text-xs text-muted-foreground italic">
                                         No projects available
                                     </p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Model selector for project nodes */}
+                    {selectedNode && selectedNode.type === "project" && (
+                        <div className="mt-4 pt-4 border-t border-border">
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                                AI Model
+                            </h4>
+                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                                {models.map((m) => (
+                                    <button
+                                        key={m.id}
+                                        className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+                                            ((selectedNode.data as any).model || "anthropic:claude-haiku-4-5") === m.id
+                                                ? "bg-primary/10 text-primary"
+                                                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                                        }`}
+                                        onClick={() => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, model: m.id, modelName: m.name } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                    >
+                                        <span className="font-medium">{m.name}</span>
+                                        <span className="text-xs text-muted-foreground ml-1.5 capitalize">— {m.provider}</span>
+                                    </button>
+                                ))}
+                                {models.length === 0 && (
+                                    <p className="text-xs text-muted-foreground italic">No models available</p>
                                 )}
                             </div>
                         </div>

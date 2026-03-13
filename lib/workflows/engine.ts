@@ -284,7 +284,7 @@ export async function executeWorkflowHeadless(params: {
                             chatId,
                             content: prompt,
                             previousMessages: [],
-                            model: "anthropic:claude-haiku-4-5",
+                            model: node.data.model || "anthropic:claude-haiku-4-5",
                         }),
                     }
                 );
