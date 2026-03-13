@@ -17,6 +17,7 @@
     "@supabase/auth-ui-shared": "^0.1.8",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.95.3",
+    "@xyflow/react": "^12.10.1",
     "ai": "^6.0.91",
     "axios": "^1.13.5",
     "class-variance-authority": "^0.7.1",

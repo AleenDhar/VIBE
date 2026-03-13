@@ -27,7 +27,14 @@ BEGIN
         COUNT(DISTINCT c.id) as chat_count,
         COUNT(DISTINCT proj.id) as project_count
     FROM public.profiles p
-    LEFT JOIN public.chats c ON c.user_id = p.id
+    -- Only join chats that have at least one message
+    LEFT JOIN (
+        SELECT ch.id, ch.user_id 
+        FROM public.chats ch
+        WHERE EXISTS (
+            SELECT 1 FROM public.chat_messages cm WHERE cm.chat_id = ch.id
+        )
+    ) c ON c.user_id = p.id
     LEFT JOIN public.projects proj ON proj.owner_id = p.id
     GROUP BY p.id, p.username, p.full_name, p.avatar_url, p.role;
 END;

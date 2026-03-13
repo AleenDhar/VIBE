@@ -252,13 +252,17 @@ export async function getOmnivisionChatsForUser(targetUserId: string) {
         lastStatusMap[s.chat_id] = s.last_type;
     });
 
-    return (chats || []).map(chat => {
-        return {
-            ...chat,
-            project_name: chat.project_id ? (projectMap[chat.project_id] ?? null) : null,
-            last_msg_type: lastStatusMap[chat.id] ?? null,
-            profiles: profileData || null,
-        };
+    // Merge and filter out empty chats
+    // A chat only exists in lastStatusMap if it has at least one message row.
+    return (chats || [])
+        .filter(chat => lastStatusMap[chat.id] !== undefined)
+        .map(chat => {
+            return {
+                ...chat,
+                project_name: chat.project_id ? (projectMap[chat.project_id] ?? null) : null,
+                last_msg_type: lastStatusMap[chat.id] ?? null,
+                profiles: profileData || null,
+            };
     });
 }
 
