@@ -19,6 +19,7 @@ import {
     Eye,
     Star,
     Trash2,
+    GitBranch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -29,6 +30,7 @@ import { toggleStarChat } from "@/lib/actions/chat";
 const menuItems = [
     { name: "Chats", href: "/chats", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
+    { name: "Workflows", href: "/workflows", icon: GitBranch },
     // { name: "App Builder", href: "/builder", icon: Wand2 },
     // { name: "Users", href: "/users", icon: Users }
     { name: "Admin Panel", href: "/admin", icon: ShieldCheck },
