@@ -27,10 +27,12 @@ import {
     GripVertical,
     Clock,
     Trash2,
+    Repeat,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ProjectNode } from "./nodes/ProjectNode";
+import { LoopNode } from "./nodes/LoopNode";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { updateWorkflow, getWorkflowExecutions } from "@/lib/actions/workflows";
@@ -40,6 +42,7 @@ import Link from "next/link";
 const nodeTypes = {
     trigger: TriggerNode,
     project: ProjectNode,
+    loop: LoopNode,
 };
 
 interface Project {
@@ -153,12 +156,19 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                 y: event.clientY,
             });
 
+            const labelMap: Record<string, string> = {
+                trigger: "Manual Trigger",
+                project: "Project Node",
+                loop: "Loop Over Items",
+            };
+
             const newNode: Node = {
                 id: `node_${Date.now()}`,
                 type,
                 position,
                 data: {
-                    label: type === "trigger" ? "Manual Trigger" : "Project Node",
+                    label: labelMap[type] || type,
+                    ...(type === "loop" ? { arrayField: "items", onError: "continue" } : {}),
                 },
             };
 
@@ -319,6 +329,43 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                                     return next;
                                 });
                             }
+                        } else if (data.event === "loop_iteration_started") {
+                            // Update loop node with progress
+                            setNodes((nds) =>
+                                nds.map((n) =>
+                                    n.id === data.nodeId
+                                        ? { ...n, data: { ...n.data, status: "running", loopProgress: `${data.index + 1}/${data.total}` } }
+                                        : n
+                                )
+                            );
+                        } else if (data.event === "loop_iteration_finished") {
+                            setNodes((nds) =>
+                                nds.map((n) =>
+                                    n.id === data.nodeId
+                                        ? { ...n, data: { ...n.data, loopProgress: `${data.index + 1}/${data.total}` } }
+                                        : n
+                                )
+                            );
+                        } else if (data.event === "loop_finished") {
+                            setNodes((nds) =>
+                                nds.map((n) =>
+                                    n.id === data.nodeId
+                                        ? { ...n, data: { ...n.data, status: "completed", loopProgress: `${data.successCount}/${data.totalItems} ✓` } }
+                                        : n
+                                )
+                            );
+                            setNodeLogs((prev) =>
+                                prev.map((l) =>
+                                    l.nodeId === data.nodeId && l.status === "running"
+                                        ? {
+                                            ...l,
+                                            status: "completed",
+                                            output: `Loop completed: ${data.successCount}/${data.totalItems} items succeeded, ${data.failCount} failed.`,
+                                            durationMs: data.durationMs,
+                                        }
+                                        : l
+                                )
+                            );
                         } else if (data.event === "node_error") {
                             setNodes((nds) =>
                                 nds.map((n) =>
@@ -474,6 +521,7 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                     </h4>
                     <DraggableNode type="trigger" label="Manual Trigger" icon={Zap} color="violet" />
                     <DraggableNode type="project" label="Project Node" icon={FolderOpen} color="primary" />
+                    <DraggableNode type="loop" label="Loop Node" icon={Repeat} color="amber" />
 
                     {/* Schedule config when trigger node is selected */}
                     {selectedNode && selectedNode.type === "trigger" && (
@@ -650,6 +698,87 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                         </div>
                     )}
 
+                    {/* Loop node config */}
+                    {selectedNode && selectedNode.type === "loop" && (
+                        <div className="mt-4 pt-4 border-t border-border">
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                                Loop Configuration
+                            </h4>
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        Array Field Path
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm font-mono"
+                                        value={(selectedNode.data as any).arrayField || "items"}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, arrayField: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                        placeholder="e.g. bdr_list or data.account_ids"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                        Dot-path to the array in the previous node&apos;s structured output
+                                    </p>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        On Error
+                                    </label>
+                                    <select
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                                        value={(selectedNode.data as any).onError || "continue"}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, onError: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                    >
+                                        <option value="continue">Continue (skip failed items)</option>
+                                        <option value="stop">Stop (halt on first error)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        Label
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                                        value={(selectedNode.data as any).label || ""}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, label: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                        placeholder="Loop Over Items"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-3 p-2 rounded-md bg-amber-500/10 dark:bg-amber-500/5">
+                                <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                                    <strong>body</strong> handle → nodes that repeat per item<br />
+                                    <strong>exit</strong> handle → nodes that run after loop completes
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Delete selected node */}
                     {selectedNode && (
                         <div className="mt-4 pt-4 border-t border-border">
@@ -752,7 +881,7 @@ function DraggableNode({
             onDragStart={onDragStart}
         >
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40" />
-            <Icon className={`h-4 w-4 ${color === "violet" ? "text-violet-500" : "text-primary"}`} />
+            <Icon className={`h-4 w-4 ${color === "violet" ? "text-violet-500" : color === "amber" ? "text-amber-500" : "text-primary"}`} />
             <span className="text-sm">{label}</span>
         </div>
     );
