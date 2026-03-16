@@ -256,6 +256,7 @@ export function NodeInspectorPanel({
     const nodeData = node.data as any;
     const isProject = node.type === "project";
     const isTrigger = node.type === "trigger";
+    const isDispatch = node.type === "dispatch";
 
     // Find connected nodes
     const parentEdges = edges.filter((e) => e.target === node.id);
@@ -273,7 +274,7 @@ export function NodeInspectorPanel({
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
                 <div className="flex items-center gap-2">
-                    <div className={`rounded-lg p-1.5 ${isTrigger ? "bg-violet-500/10" : "bg-primary/10"}`}>
+                    <div className={`rounded-lg p-1.5 ${isTrigger ? "bg-violet-500/10" : isDispatch ? "bg-sky-500/10" : "bg-primary/10"}`}>
                         {isTrigger ? (
                             <Zap className="h-4 w-4 text-violet-500" />
                         ) : (
@@ -285,7 +286,7 @@ export function NodeInspectorPanel({
                             {nodeData.projectName || nodeData.label || node.type}
                         </h3>
                         <p className="text-[10px] text-muted-foreground">
-                            {isTrigger ? "Trigger Node" : "Project Node"} · {node.id.slice(0, 16)}
+                            {isTrigger ? "Trigger Node" : isDispatch ? "Dispatch Node" : "Project Node"} · {node.id.slice(0, 16)}
                         </p>
                     </div>
                 </div>

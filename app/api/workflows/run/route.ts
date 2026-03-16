@@ -2,10 +2,9 @@ import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import {
     topologicalSort,
-    parseWorkflowOutput,
-    buildNodePrompt,
-    generateAISummary,
-    readChatStream,
+    executeSubGraph,
+    type ExecutionContext,
+    type NodeOutput,
 } from "@/lib/workflows/engine";
 
 export const dynamic = "force-dynamic";
@@ -55,155 +54,49 @@ export async function POST(req: NextRequest) {
                 );
             };
 
-            const nodeOutputs: Record<string, {
-                structured: Record<string, any> | null;
-                text: string;
-                raw: string;
-            }> = {};
+            const nodeOutputs: Record<string, NodeOutput> = {};
+            const nodeMap = new Map<string, any>(nodes.map((n: any) => [n.id, n]));
+
+            const parentMap = new Map<string, string[]>();
+            edges.forEach((e: any) => {
+                if (!parentMap.has(e.target)) parentMap.set(e.target, []);
+                parentMap.get(e.target)!.push(e.source);
+            });
+
+            const childMap = new Map<string, { target: string; sourceHandle?: string }[]>();
+            edges.forEach((e: any) => {
+                if (!childMap.has(e.source)) childMap.set(e.source, []);
+                childMap.get(e.source)!.push({ target: e.target, sourceHandle: e.sourceHandle });
+            });
 
             try {
                 const sortedIds = topologicalSort(nodes, edges);
-                const nodeMap = new Map<string, any>(nodes.map((n: any) => [n.id, n]));
 
-                const parentMap = new Map<string, string[]>();
-                edges.forEach((e: any) => {
-                    if (!parentMap.has(e.target)) parentMap.set(e.target, []);
-                    parentMap.get(e.target)!.push(e.source);
-                });
-
+                // Pre-set trigger outputs
                 for (const nodeId of sortedIds) {
-                    const node = nodeMap.get(nodeId) as any;
-                    if (!node) continue;
-
-                    const label = node.data?.label || node.data?.projectName || nodeId;
-                    const nodeStartTime = Date.now();
-
-                    send({ event: "node_started", nodeId, label });
-
-                    if (node.type === "trigger") {
+                    const node = nodeMap.get(nodeId);
+                    if (node?.type === "trigger") {
                         const triggerOutput = triggerInput || "Workflow triggered";
                         nodeOutputs[nodeId] = { structured: null, text: triggerOutput, raw: triggerOutput };
-                        send({ event: "node_finished", nodeId, output: triggerOutput });
-                        continue;
-                    }
-
-                    if (node.type === "project" && node.data?.projectId) {
-                        try {
-                            const parentIds = parentMap.get(nodeId) || [];
-                            let previousOutput: { structured: Record<string, any> | null; text: string } | null = null;
-
-                            if (parentIds.length === 1) {
-                                previousOutput = nodeOutputs[parentIds[0]] || null;
-                            } else if (parentIds.length > 1) {
-                                const mergedStructured: Record<string, any> = {};
-                                const mergedTexts: string[] = [];
-                                for (const pid of parentIds) {
-                                    const po = nodeOutputs[pid];
-                                    if (po?.structured) mergedStructured[pid] = po.structured;
-                                    if (po?.text) {
-                                        const parentLabel = nodeMap.get(pid)?.data?.label || pid;
-                                        mergedTexts.push(`[From: ${parentLabel}]\n${po.text}`);
-                                    }
-                                }
-                                previousOutput = {
-                                    structured: Object.keys(mergedStructured).length > 0 ? mergedStructured : null,
-                                    text: mergedTexts.join("\n\n"),
-                                };
-                            }
-
-                            const isFirstProject = parentIds.some(pid => nodeMap.get(pid)?.type === "trigger");
-                            const prompt = buildNodePrompt(previousOutput, label, isFirstProject);
-
-                            const chatId = crypto.randomUUID();
-                            const chatResponse = await fetch(
-                                new URL("/api/chat", req.url).toString(),
-                                {
-                                    method: "POST",
-                                    headers: {
-                                        "Content-Type": "application/json",
-                                        Cookie: req.headers.get("cookie") || "",
-                                    },
-                                    body: JSON.stringify({
-                                        projectId: node.data.projectId,
-                                        chatId,
-                                        content: prompt,
-                                        previousMessages: [],
-                                        model: node.data.model || "anthropic:claude-haiku-4-5",
-                                    }),
-                                }
-                            );
-
-                            if (!chatResponse.ok) {
-                                throw new Error(`Chat API returned ${chatResponse.status}`);
-                            }
-
-                            const rawOutput = await readChatStream(chatResponse);
-                            const parsed = parseWorkflowOutput(rawOutput);
-
-                            nodeOutputs[nodeId] = {
-                                structured: parsed.structured,
-                                text: parsed.text,
-                                raw: rawOutput,
-                            };
-
-                            if (execution) {
-                                await supabase
-                                    .from("workflow_executions")
-                                    .update({ node_outputs: nodeOutputs })
-                                    .eq("id", execution.id);
-                            }
-
-                            const durationMs = Date.now() - nodeStartTime;
-                            const aiSummary = generateAISummary(parsed.text, parsed.structured);
-
-                            const displayOutput = parsed.structured
-                                ? `[Structured Output] ${JSON.stringify(parsed.structured).slice(0, 200)}...\n\n${parsed.text.slice(0, 300)}`
-                                : parsed.text.slice(0, 500);
-
-                            send({
-                                event: "node_finished",
-                                nodeId,
-                                output: displayOutput,
-                                hasStructuredOutput: !!parsed.structured,
-                                durationMs,
-                                aiSummary,
-                                inputData: previousOutput ? {
-                                    structured: previousOutput.structured,
-                                    text: previousOutput.text?.slice(0, 2000),
-                                } : null,
-                                outputData: {
-                                    structured: parsed.structured,
-                                    text: parsed.text?.slice(0, 5000),
-                                },
-                            });
-                        } catch (error: any) {
-                            send({
-                                event: "node_error",
-                                nodeId,
-                                error: error.message,
-                                durationMs: Date.now() - nodeStartTime,
-                            });
-
-                            if (execution) {
-                                await supabase
-                                    .from("workflow_executions")
-                                    .update({
-                                        status: "failed",
-                                        error: error.message,
-                                        node_outputs: nodeOutputs,
-                                        finished_at: new Date().toISOString(),
-                                    })
-                                    .eq("id", execution.id);
-                            }
-
-                            controller.close();
-                            return;
-                        }
-                    } else {
-                        send({ event: "node_finished", nodeId, output: "No project assigned - skipped" });
                     }
                 }
 
+                const ctx: ExecutionContext = {
+                    nodeMap,
+                    edges,
+                    parentMap,
+                    childMap,
+                    nodeOutputs,
+                    baseUrl: new URL("/", req.url).origin,
+                    cookieHeader: req.headers.get("cookie") || "",
+                    send,
+                    supabase,
+                    executionId: execution?.id,
+                };
+
+                await executeSubGraph(sortedIds, ctx);
+
+                // Mark execution completed
                 if (execution) {
                     const lastNodeId = sortedIds[sortedIds.length - 1];
                     const lastOutput = nodeOutputs[lastNodeId];
@@ -222,8 +115,9 @@ export async function POST(req: NextRequest) {
                         .eq("id", execution.id);
                 }
 
+                // Build pipeline summary
                 const pipelineSummary = sortedIds
-                    .filter((id) => nodeMap.get(id)?.type === "project")
+                    .filter((id) => nodeMap.get(id)?.type === "project" || nodeMap.get(id)?.type === "loop" || nodeMap.get(id)?.type === "dispatch")
                     .map((id) => ({
                         nodeId: id,
                         label: nodeMap.get(id)?.data?.label || id,
@@ -246,6 +140,7 @@ export async function POST(req: NextRequest) {
                         .update({
                             status: "failed",
                             error: error.message,
+                            node_outputs: nodeOutputs,
                             finished_at: new Date().toISOString(),
                         })
                         .eq("id", execution.id);
