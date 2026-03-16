@@ -379,6 +379,22 @@ export async function executeSubGraph(
             continue;
         }
 
+        // ─── Dispatch Node ──────────────────────────────────────────
+        if (node.type === "dispatch") {
+            try {
+                await executeDispatchNode(nodeId, node, ctx, nodeStartTime);
+            } catch (error: any) {
+                ctx.send?.({
+                    event: "node_error",
+                    nodeId,
+                    error: error.message,
+                    durationMs: Date.now() - nodeStartTime,
+                });
+                throw error;
+            }
+            continue;
+        }
+
         // ─── Loop Node ───────────────────────────────────────────────
         if (node.type === "loop") {
             try {
@@ -739,6 +755,137 @@ async function executeLoopNode(
         event: "node_finished",
         nodeId,
         output: `Loop completed: ${successCount}/${array.length} items processed.`,
+        durationMs,
+        hasStructuredOutput: true,
+        outputData: ctx.nodeOutputs[nodeId],
+    });
+}
+
+// ─── Dispatch Node Executor ─────────────────────────────────────────────
+
+/**
+ * Execute a dispatch node: fires an async task to DeepAgent under a BDR's account.
+ * Does NOT wait for completion — fire-and-forget.
+ * Expects upstream data to contain BDR info (name, email, geography) from loop context.
+ */
+async function executeDispatchNode(
+    nodeId: string,
+    node: any,
+    ctx: ExecutionContext,
+    nodeStartTime: number
+): Promise<void> {
+    const label = node.data?.label || "Dispatch";
+    const systemPrompt: string = node.data?.systemPrompt || "";
+    const messageTemplate: string = node.data?.messageTemplate || "";
+    const model: string = node.data?.model || "anthropic:claude-sonnet-4-20250514";
+    const projectId: string = node.data?.projectId || "";
+
+    // Get upstream data (from loop context item or parent output)
+    const parentIds = ctx.parentMap.get(nodeId) || [];
+    let bdrData: any = null;
+
+    // Priority 1: loop context item (when inside a loop body)
+    if (ctx.loopContext?.item) {
+        bdrData = ctx.loopContext.item;
+    }
+    // Priority 2: parent node output
+    else if (parentIds.length >= 1) {
+        const parentOutput = ctx.nodeOutputs[parentIds[0]];
+        bdrData = parentOutput?.structured || null;
+    }
+
+    if (!bdrData) {
+        throw new Error(`Dispatch node "${label}": No upstream data found`);
+    }
+
+    // Extract BDR info from the data
+    const bdrEmail = bdrData.email || bdrData.emailId || bdrData.Email || bdrData.email_address || bdrData["Email address"] || "";
+    const bdrName = bdrData.name || bdrData.Name || bdrData.full_name || "";
+    const bdrGeography = bdrData.geography || bdrData.Geography || "";
+    const bdrRole = bdrData.role || bdrData.Role || "";
+
+    if (!bdrEmail) {
+        throw new Error(`Dispatch node "${label}": Could not find email in upstream data: ${JSON.stringify(bdrData).slice(0, 200)}`);
+    }
+
+    // Interpolate template variables in message
+    const message = messageTemplate
+        .replace(/\{\{name\}\}/gi, bdrName)
+        .replace(/\{\{email\}\}/gi, bdrEmail)
+        .replace(/\{\{emailId\}\}/gi, bdrEmail)
+        .replace(/\{\{geography\}\}/gi, bdrGeography)
+        .replace(/\{\{role\}\}/gi, bdrRole)
+        .replace(/\{\{data\}\}/gi, JSON.stringify(bdrData))
+        || `Process workflow for BDR: ${bdrName} | ${bdrGeography} | ${bdrEmail} | ${bdrRole}`;
+
+    // Interpolate template variables in system prompt too
+    const finalSystemPrompt = systemPrompt
+        .replace(/\{\{name\}\}/gi, bdrName)
+        .replace(/\{\{email\}\}/gi, bdrEmail)
+        .replace(/\{\{emailId\}\}/gi, bdrEmail)
+        .replace(/\{\{geography\}\}/gi, bdrGeography)
+        .replace(/\{\{role\}\}/gi, bdrRole)
+        .replace(/\{\{data\}\}/gi, JSON.stringify(bdrData));
+
+    ctx.send?.({
+        event: "dispatch_started",
+        nodeId,
+        bdrName,
+        bdrEmail,
+    });
+
+    // Call the dispatch-bdr API route
+    const dispatchUrl = `${ctx.baseUrl}/api/workflows/dispatch-bdr`;
+    const dispatchResponse = await fetch(dispatchUrl, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Cookie: ctx.cookieHeader,
+        },
+        body: JSON.stringify({
+            bdr_email: bdrEmail,
+            bdr_name: bdrName,
+            system_prompt: finalSystemPrompt,
+            message,
+            model,
+            project_id: projectId || undefined,
+        }),
+    });
+
+    const result = await dispatchResponse.json();
+
+    if (!dispatchResponse.ok || !result.dispatched) {
+        throw new Error(
+            `Dispatch failed for ${bdrName} (${bdrEmail}): ${result.error || "Unknown error"}`
+        );
+    }
+
+    const durationMs = Date.now() - nodeStartTime;
+
+    ctx.nodeOutputs[nodeId] = {
+        structured: {
+            dispatched: true,
+            chat_id: result.chat_id,
+            bdr_user_id: result.bdr_user_id,
+            bdr_name: result.bdr_name,
+            bdr_email: result.bdr_email,
+        },
+        text: `Dispatched task for ${bdrName} (${bdrEmail}) → chat_id=${result.chat_id}`,
+        raw: JSON.stringify(result),
+    };
+
+    // Persist
+    if (ctx.supabase && ctx.executionId) {
+        await ctx.supabase
+            .from("workflow_executions")
+            .update({ node_outputs: ctx.nodeOutputs })
+            .eq("id", ctx.executionId);
+    }
+
+    ctx.send?.({
+        event: "node_finished",
+        nodeId,
+        output: `Dispatched for ${bdrName} (${bdrEmail})`,
         durationMs,
         hasStructuredOutput: true,
         outputData: ctx.nodeOutputs[nodeId],

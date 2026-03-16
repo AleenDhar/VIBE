@@ -28,11 +28,13 @@ import {
     Clock,
     Trash2,
     Repeat,
+    Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { TriggerNode } from "./nodes/TriggerNode";
 import { ProjectNode } from "./nodes/ProjectNode";
 import { LoopNode } from "./nodes/LoopNode";
+import { DispatchNode } from "./nodes/DispatchNode";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { NodeInspectorPanel } from "./NodeInspectorPanel";
 import { updateWorkflow, getWorkflowExecutions } from "@/lib/actions/workflows";
@@ -43,6 +45,7 @@ const nodeTypes = {
     trigger: TriggerNode,
     project: ProjectNode,
     loop: LoopNode,
+    dispatch: DispatchNode,
 };
 
 interface Project {
@@ -106,8 +109,8 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [showInspector, setShowInspector] = useState(false);
     const [nodeRunDataMap, setNodeRunDataMap] = useState<Record<string, {
-        input?: { structured: any; text: string } | null;
-        output?: { structured: any; text: string } | null;
+        input?: { structured: any; text: string };
+        output?: { structured: any; text: string };
     }>>({});
 
     // Schedule state
@@ -160,6 +163,7 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                 trigger: "Manual Trigger",
                 project: "Project Node",
                 loop: "Loop Over Items",
+                dispatch: "Dispatch to BDR",
             };
 
             const newNode: Node = {
@@ -169,6 +173,7 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                 data: {
                     label: labelMap[type] || type,
                     ...(type === "loop" ? { arrayField: "items", onError: "continue" } : {}),
+                    ...(type === "dispatch" ? { systemPrompt: "", messageTemplate: "", model: "anthropic:claude-sonnet-4-20250514" } : {}),
                 },
             };
 
@@ -305,8 +310,8 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                                 setNodeRunDataMap((prev) => ({
                                     ...prev,
                                     [data.nodeId]: {
-                                        input: data.inputData || null,
-                                        output: data.outputData || null,
+                                        input: data.inputData || undefined,
+                                        output: data.outputData || undefined,
                                     },
                                 }));
                             }
@@ -329,6 +334,16 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                                     return next;
                                 });
                             }
+                        } else if (data.event === "dispatch_started") {
+                            setNodeLogs((prev) => [
+                                ...prev,
+                                {
+                                    nodeId: data.nodeId,
+                                    label: `Dispatching to ${data.bdrName || data.bdrEmail || "BDR"}`,
+                                    status: "running",
+                                    timestamp: new Date().toISOString(),
+                                },
+                            ]);
                         } else if (data.event === "loop_iteration_started") {
                             // Update loop node with progress
                             setNodes((nds) =>
@@ -522,6 +537,7 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                     <DraggableNode type="trigger" label="Manual Trigger" icon={Zap} color="violet" />
                     <DraggableNode type="project" label="Project Node" icon={FolderOpen} color="primary" />
                     <DraggableNode type="loop" label="Loop Node" icon={Repeat} color="amber" />
+                    <DraggableNode type="dispatch" label="Dispatch Node" icon={Send} color="sky" />
 
                     {/* Schedule config when trigger node is selected */}
                     {selectedNode && selectedNode.type === "trigger" && (
@@ -774,6 +790,161 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                                 <p className="text-[10px] text-amber-600 dark:text-amber-400">
                                     <strong>body</strong> handle → nodes that repeat per item<br />
                                     <strong>exit</strong> handle → nodes that run after loop completes
+                                </p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Dispatch node config */}
+                    {selectedNode && selectedNode.type === "dispatch" && (
+                        <div className="mt-4 pt-4 border-t border-border">
+                            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                                Dispatch Configuration
+                            </h4>
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        Label
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+                                        value={(selectedNode.data as any).label || ""}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, label: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                        placeholder="Dispatch to BDR"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        Message Template
+                                    </label>
+                                    <textarea
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm resize-none h-20 font-mono"
+                                        value={(selectedNode.data as any).messageTemplate || ""}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, messageTemplate: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                        placeholder="Find 2 hot accounts for {{name}} | {{geography}} | {{email}} and run ABM..."
+                                    />
+                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                        Variables: {"{{name}}"}, {"{{email}}"}, {"{{geography}}"}, {"{{role}}"}, {"{{data}}"}
+                                    </p>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        System Prompt
+                                    </label>
+                                    <textarea
+                                        className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm resize-none h-32 font-mono"
+                                        value={(selectedNode.data as any).systemPrompt || ""}
+                                        onChange={(e) => {
+                                            setNodes((nds) =>
+                                                nds.map((n) =>
+                                                    n.id === selectedNode.id
+                                                        ? { ...n, data: { ...n.data, systemPrompt: e.target.value } }
+                                                        : n
+                                                )
+                                            );
+                                        }}
+                                        placeholder="System instructions for the dispatched agent..."
+                                    />
+                                    <p className="text-[10px] text-muted-foreground mt-1">
+                                        Or leave empty to use the project&apos;s system prompt
+                                    </p>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        Project (optional)
+                                    </label>
+                                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                                        <button
+                                            className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+                                                !(selectedNode.data as any).projectId
+                                                    ? "bg-primary/10 text-primary"
+                                                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                                            }`}
+                                            onClick={() => {
+                                                setNodes((nds) =>
+                                                    nds.map((n) =>
+                                                        n.id === selectedNode.id
+                                                            ? { ...n, data: { ...n.data, projectId: "", projectName: "" } }
+                                                            : n
+                                                    )
+                                                );
+                                            }}
+                                        >
+                                            None (use system prompt above)
+                                        </button>
+                                        {projects.map((p) => (
+                                            <button
+                                                key={p.id}
+                                                className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+                                                    (selectedNode.data as any).projectId === p.id
+                                                        ? "bg-primary/10 text-primary"
+                                                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                                                }`}
+                                                onClick={() => {
+                                                    setNodes((nds) =>
+                                                        nds.map((n) =>
+                                                            n.id === selectedNode.id
+                                                                ? { ...n, data: { ...n.data, projectId: p.id, projectName: p.name } }
+                                                                : n
+                                                        )
+                                                    );
+                                                }}
+                                            >
+                                                {p.name}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-medium text-muted-foreground uppercase mb-1 block">
+                                        AI Model
+                                    </label>
+                                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                                        {models.map((m) => (
+                                            <button
+                                                key={m.id}
+                                                className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
+                                                    ((selectedNode.data as any).model || "anthropic:claude-sonnet-4-20250514") === m.id
+                                                        ? "bg-primary/10 text-primary"
+                                                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                                                }`}
+                                                onClick={() => {
+                                                    setNodes((nds) =>
+                                                        nds.map((n) =>
+                                                            n.id === selectedNode.id
+                                                                ? { ...n, data: { ...n.data, model: m.id, modelName: m.name } }
+                                                                : n
+                                                        )
+                                                    );
+                                                }}
+                                            >
+                                                <span className="font-medium">{m.name}</span>
+                                                <span className="text-xs text-muted-foreground ml-1.5 capitalize">— {m.provider}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="mt-3 p-2 rounded-md bg-sky-500/10 dark:bg-sky-500/5">
+                                <p className="text-[10px] text-sky-600 dark:text-sky-400">
+                                    <strong>Fire &amp; forget</strong> — dispatches an async task to DeepAgent under the BDR&apos;s account. Does not wait for completion.
                                 </p>
                             </div>
                         </div>

@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
 
                 // Build pipeline summary
                 const pipelineSummary = sortedIds
-                    .filter((id) => nodeMap.get(id)?.type === "project" || nodeMap.get(id)?.type === "loop")
+                    .filter((id) => nodeMap.get(id)?.type === "project" || nodeMap.get(id)?.type === "loop" || nodeMap.get(id)?.type === "dispatch")
                     .map((id) => ({
                         nodeId: id,
                         label: nodeMap.get(id)?.data?.label || id,

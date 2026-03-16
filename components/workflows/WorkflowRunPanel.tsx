@@ -38,7 +38,7 @@ interface WorkflowRunPanelProps {
     nodeLogs: NodeLog[];
     isRunning: boolean;
     executions: Execution[];
-    nodeRunDataMap: Record<string, { input?: { structured: any; text: string } | null; output?: { structured: any; text: string } | null }>;
+    nodeRunDataMap: Record<string, { input?: { structured: any; text: string }; output?: { structured: any; text: string } }>;
     nodeOrder: { id: string; label: string; type: string }[];
     onRerun?: () => void;
     initialTab?: "live" | "results" | "history";
@@ -90,7 +90,7 @@ export function WorkflowRunPanel({
     const viewingExecution = viewingExecutionId ? executions.find((e) => e.id === viewingExecutionId) : null;
     const historyNodeRunDataMap = useMemo(() => {
         if (!viewingExecution?.node_outputs) return {};
-        const map: Record<string, { input?: { structured: any; text: string } | null; output?: { structured: any; text: string } | null }> = {};
+        const map: Record<string, { input?: { structured: any; text: string }; output?: { structured: any; text: string } }> = {};
         const nodeIds = Object.keys(viewingExecution.node_outputs);
         for (let i = 0; i < nodeIds.length; i++) {
             const nodeId = nodeIds[i];
@@ -99,7 +99,7 @@ export function WorkflowRunPanel({
             const prevNodeId = i > 0 ? nodeIds[i - 1] : null;
             const prevOut = prevNodeId ? viewingExecution.node_outputs[prevNodeId] : null;
             map[nodeId] = {
-                input: prevOut ? { structured: prevOut.structured, text: prevOut.text } : null,
+                input: prevOut ? { structured: prevOut.structured, text: prevOut.text } : undefined,
                 output: { structured: nodeOut.structured, text: nodeOut.text },
             };
         }

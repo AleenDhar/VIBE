@@ -4,22 +4,15 @@ import { useState, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-    Users,
     ArrowRight,
     Copy,
     Check,
     ExternalLink,
-    Mail,
-    Linkedin,
     Download,
     Play,
     ChevronDown,
     ChevronRight,
-    Shield,
-    ShieldCheck,
-    ShieldX,
     Zap,
-    Target,
     FileJson,
     Eye,
     Code2,
@@ -29,6 +22,10 @@ import {
     Info,
     Lightbulb,
     MessageSquare,
+    LayoutList,
+    Send,
+    Hash,
+    Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
@@ -44,18 +41,25 @@ const mdComponents = {
     h1: ({ node, ...props }: any) => <h3 className="font-semibold text-foreground mt-2 mb-1" {...props} />,
     h2: ({ node, ...props }: any) => <h3 className="font-semibold text-foreground mt-2 mb-1" {...props} />,
     h3: ({ node, ...props }: any) => <h4 className="font-semibold text-foreground mt-1.5 mb-0.5" {...props} />,
-    hr: ({ node, ...props }: any) => <hr className="my-2 border-border/50" {...props} />,
-    a: ({ node, ...props }: any) => <a className="text-primary hover:underline underline-offset-2" target="_blank" rel="noopener noreferrer" {...props} />,
-    code: ({ node, ...props }: any) => <code className="bg-muted px-1 py-0.5 rounded text-[0.9em] font-mono" {...props} />,
-    pre: ({ node, ...props }: any) => <pre className="bg-muted/50 p-2 rounded-md my-1.5 overflow-x-auto border border-border/30 text-[11px]" {...props} />,
-    blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-primary/30 pl-3 py-0.5 italic text-muted-foreground my-1.5" {...props} />,
-    table: ({ node, ...props }: any) => <div className="overflow-x-auto my-2 rounded border border-border"><table className="w-full text-xs border-collapse" {...props} /></div>,
-    thead: ({ node, ...props }: any) => <thead className="bg-muted text-muted-foreground uppercase text-[10px] tracking-wider" {...props} />,
-    th: ({ node, ...props }: any) => <th className="px-2 py-1.5 font-medium text-left" {...props} />,
-    td: ({ node, ...props }: any) => <td className="px-2 py-1.5 border-t border-border/30" {...props} />,
+    code: ({ node, inline, ...props }: any) =>
+        inline ? (
+            <code className="text-[0.9em] bg-muted/30 px-1 py-0.5 rounded" {...props} />
+        ) : (
+            <code className="block text-[0.9em] bg-muted/20 p-2 rounded mt-1 overflow-x-auto" {...props} />
+        ),
+    a: ({ node, ...props }: any) => (
+        <a className="text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />
+    ),
+    table: ({ node, ...props }: any) => (
+        <div className="overflow-x-auto my-2">
+            <table className="text-xs border-collapse w-full" {...props} />
+        </div>
+    ),
+    th: ({ node, ...props }: any) => <th className="border border-border/30 px-2 py-1 text-left bg-muted/20 font-medium" {...props} />,
+    td: ({ node, ...props }: any) => <td className="border border-border/30 px-2 py-1" {...props} />,
 };
 
-function CompactMarkdown({ children, className = "" }: { children: string; className?: string }) {
+function CompactMarkdown({ children, className }: { children: string; className?: string }) {
     return (
         <div className={className}>
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
@@ -65,21 +69,18 @@ function CompactMarkdown({ children, className = "" }: { children: string; class
     );
 }
 
-// ─── Types ──────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────
 
 interface NodeRunData {
-    input?: { structured: any; text: string } | null;
-    output?: { structured: any; text: string } | null;
+    input?: { structured?: any; text?: string };
+    output?: { structured?: any; text?: string };
 }
 
 interface NodeLog {
     nodeId: string;
     label: string;
     status: "running" | "completed" | "failed";
-    output?: string;
     error?: string;
-    timestamp: string;
-    hasStructuredOutput?: boolean;
     durationMs?: number;
     aiSummary?: string;
 }
@@ -87,29 +88,13 @@ interface NodeLog {
 interface PipelineStage {
     nodeId: string;
     label: string;
-    contactCount: number;
-    icon: "discovery" | "validation" | "outreach";
+    itemCount: number;
     status: "completed" | "failed" | "skipped";
     summary: string;
     error?: string;
     durationMs?: number;
     aiSummary?: string;
     aiText?: string;
-}
-
-interface Contact {
-    name: string;
-    title: string;
-    company: string;
-    email?: string;
-    linkedin_url?: string;
-    phone?: string;
-    priority?: string;
-    score?: number;
-    email_verified?: boolean;
-    linkedin_validated?: boolean;
-    outreach_snippet?: string;
-    [key: string]: any;
 }
 
 interface WorkflowResultsPanelProps {
@@ -119,109 +104,111 @@ interface WorkflowResultsPanelProps {
     onRerun?: () => void;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────
+// ─── Smart Data Detection ────────────────────────────────────────────
 
-function extractContacts(structured: any): Contact[] {
-    if (!structured || typeof structured !== "object") return [];
+/** Detect what kind of array data exists in structured output */
+function detectArrayData(structured: any): { key: string; items: any[] } | null {
+    if (!structured || typeof structured !== "object") return null;
 
-    for (const key of ["top_contacts", "contacts", "outreach_sequences", "leads", "results", "selected_contacts", "enriched_contacts"]) {
-        if (Array.isArray(structured[key]) && structured[key].length > 0) {
-            return structured[key].map(normalizeContact);
-        }
-    }
+    // Find the largest array in the structured data
+    let bestKey = "";
+    let bestItems: any[] = [];
 
-    for (const val of Object.values(structured)) {
-        if (Array.isArray(val) && val.length > 0 && typeof val[0] === "object" && val[0] !== null) {
-            const first = val[0] as any;
-            if (first.name || first.full_name || first.firstName || first.email || first.title) {
-                return (val as any[]).map(normalizeContact);
+    for (const [key, value] of Object.entries(structured)) {
+        if (Array.isArray(value) && value.length > 0 && typeof value[0] === "object" && value[0] !== null) {
+            if (value.length > bestItems.length) {
+                bestKey = key;
+                bestItems = value;
             }
         }
     }
 
-    return [];
+    return bestItems.length > 0 ? { key: bestKey, items: bestItems } : null;
 }
 
-function normalizeContact(raw: any): Contact {
-    return {
-        name: raw.name || raw.full_name || `${raw.firstName || ""} ${raw.lastName || ""}`.trim() || "Unknown",
-        title: raw.title || raw.job_title || raw.role || raw.designation || "",
-        company: raw.company || raw.company_name || raw.organization || "",
-        email: raw.email || raw.email_address || "",
-        linkedin_url: raw.linkedin_url || raw.linkedin || raw.linkedinUrl || "",
-        phone: raw.phone || raw.phone_number || "",
-        priority: raw.priority || raw.tier || (raw.score ? (raw.score >= 8 ? "High" : raw.score >= 5 ? "Medium" : "Low") : ""),
-        score: raw.score || raw.relevance_score || raw.priority_score || undefined,
-        email_verified: raw.email_verified ?? raw.emailVerified ?? undefined,
-        linkedin_validated: raw.linkedin_validated ?? raw.linkedinValidated ?? undefined,
-        outreach_snippet: raw.outreach_snippet || raw.email_body || raw.message || raw.personalized_message || "",
-        ...raw,
-    };
-}
+/** Count meaningful items in structured output */
+function extractItemCount(structured: any): number {
+    const arrayData = detectArrayData(structured);
+    if (arrayData) return arrayData.items.length;
 
-function extractContactCount(structured: any): number {
-    const contacts = extractContacts(structured);
-    if (contacts.length > 0) return contacts.length;
-    if (structured?.validation_summary?.confirmed_active) return structured.validation_summary.confirmed_active;
-    if (structured?.total_contacts) return structured.total_contacts;
-    if (structured?.contact_count) return structured.contact_count;
+    // Check for common count fields
+    for (const key of ["total", "count", "total_count", "total_contacts", "contact_count", "total_results"]) {
+        if (typeof structured?.[key] === "number") return structured[key];
+    }
+
     return 0;
 }
 
-function getStageIcon(index: number, total: number) {
-    if (index === 0) return "discovery" as const;
-    if (index === total - 1) return "outreach" as const;
-    return "validation" as const;
+/** Get a display label for the array data */
+function getArrayLabel(key: string): string {
+    return key
+        .replace(/_/g, " ")
+        .replace(/([A-Z])/g, " $1")
+        .trim()
+        .replace(/\b\w/g, (l) => l.toUpperCase());
 }
 
-/** Generate a plain-English summary for a node's output */
-function generateNodeSummary(label: string, structured: any, text: string, stageType: "discovery" | "validation" | "outreach"): string {
+/** Detect the best display name for an item */
+function getItemDisplayName(item: any): string {
+    for (const key of ["name", "full_name", "company_name", "title", "label", "subject", "email", "account_name"]) {
+        if (typeof item[key] === "string" && item[key]) return item[key];
+    }
+    // Try composite
+    if (item.firstName || item.lastName) {
+        return `${item.firstName || ""} ${item.lastName || ""}`.trim();
+    }
+    return "";
+}
+
+/** Detect subtitle for an item */
+function getItemSubtitle(item: any): string {
+    const name = getItemDisplayName(item);
+    for (const key of ["title", "role", "email", "company", "description", "type", "status", "industry", "sector"]) {
+        if (typeof item[key] === "string" && item[key] && item[key] !== name) {
+            const company = item.company || item.company_name || item.organization || "";
+            if (key === "title" && company) return `${item[key]} at ${company}`;
+            return item[key];
+        }
+    }
+    return "";
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+/** Generate a generic summary for any node output */
+function generateNodeSummary(label: string, structured: any, text: string): string {
     if (!structured && !text) return "No output produced.";
 
-    const contacts = extractContacts(structured);
-    const contactCount = contacts.length || extractContactCount(structured);
+    const itemCount = extractItemCount(structured);
+    const arrayData = detectArrayData(structured);
 
-    // Try to pull specific summary fields from the structured data
-    const summary = structured?.summary || structured?.execution_summary || structured?.validation_summary;
-
-    if (stageType === "discovery") {
-        if (contactCount > 0) {
-            const company = contacts[0]?.company || structured?.account_name || structured?.company || "the target account";
-            const titles = [...new Set(contacts.slice(0, 5).map((c: Contact) => c.title).filter(Boolean))];
-            const titleStr = titles.length > 0 ? ` including ${titles.slice(0, 3).join(", ")}` : "";
-            return `Found ${contactCount} contact${contactCount !== 1 ? "s" : ""} at ${company}${titleStr}.`;
-        }
-        if (summary) return typeof summary === "string" ? summary : JSON.stringify(summary);
-        return text ? text.slice(0, 200).trim() + (text.length > 200 ? "..." : "") : "Discovery completed.";
+    if (arrayData && itemCount > 0) {
+        const arrayLabel = getArrayLabel(arrayData.key);
+        return `Produced ${itemCount} ${arrayLabel.toLowerCase()}.`;
     }
 
-    if (stageType === "validation") {
-        if (structured?.validation_summary) {
-            const vs = structured.validation_summary;
-            const parts: string[] = [];
-            if (vs.confirmed_active) parts.push(`${vs.confirmed_active} confirmed active`);
-            if (vs.not_found) parts.push(`${vs.not_found} not found`);
-            if (vs.linkedin_coverage) parts.push(`${vs.linkedin_coverage} LinkedIn coverage`);
-            return parts.length > 0
-                ? `Validated contacts: ${parts.join(", ")}.`
-                : `Validated ${contactCount} contact${contactCount !== 1 ? "s" : ""}.`;
-        }
-        if (contactCount > 0) {
-            const verified = contacts.filter((c) => c.linkedin_validated || c.email_verified).length;
-            return `Processed ${contactCount} contact${contactCount !== 1 ? "s" : ""}, ${verified} verified with LinkedIn or email.`;
-        }
-        return text ? text.slice(0, 200).trim() + (text.length > 200 ? "..." : "") : "Validation completed.";
+    // Check for status/summary fields
+    if (structured?.status) {
+        const summary = structured.summary || structured.execution_summary || structured.message || "";
+        if (summary && typeof summary === "string") return summary.slice(0, 200);
+        return `Status: ${structured.status}`;
     }
 
-    if (stageType === "outreach") {
-        if (contactCount > 0) {
-            const withSnippet = contacts.filter((c) => c.outreach_snippet).length;
-            if (withSnippet > 0) {
-                return `Prepared personalized outreach for ${withSnippet} contact${withSnippet !== 1 ? "s" : ""}, ready to push.`;
-            }
-            return `Selected top ${contactCount} contact${contactCount !== 1 ? "s" : ""} for outreach.`;
-        }
-        return text ? text.slice(0, 200).trim() + (text.length > 200 ? "..." : "") : "Outreach preparation completed.";
+    if (structured?.summary && typeof structured.summary === "string") {
+        return structured.summary.slice(0, 200);
+    }
+
+    // Fall back to text preview
+    if (text) {
+        // Extract first meaningful line
+        const lines = text.split("\n").filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("---"));
+        if (lines.length > 0) return lines[0].slice(0, 200).trim() + (lines[0].length > 200 ? "..." : "");
+    }
+
+    // Count top-level keys as a hint
+    if (structured && typeof structured === "object") {
+        const keys = Object.keys(structured);
+        return `Produced output with ${keys.length} field${keys.length !== 1 ? "s" : ""}: ${keys.slice(0, 4).join(", ")}${keys.length > 4 ? "..." : ""}.`;
     }
 
     return "Step completed.";
@@ -234,22 +221,21 @@ function getTroubleshootingHints(error: string, nodeLabel: string): string[] {
 
     if (e.includes("rate limit") || e.includes("429") || e.includes("over_request")) {
         hints.push("You've hit an API rate limit. Wait a few minutes and try again.");
-        hints.push("If this keeps happening, try running the workflow during off-peak hours.");
     }
     if (e.includes("timeout") || e.includes("timed out") || e.includes("deadline")) {
-        hints.push("The step took too long to complete. This usually means the AI was working on a large dataset.");
-        hints.push("Try simplifying the input or breaking the task into smaller pieces.");
+        hints.push("The step took too long to complete. Try simplifying the input or breaking the task into smaller pieces.");
     }
-    if (e.includes("token") || e.includes("context length") || e.includes("too long") || e.includes("8192")) {
+    if (e.includes("token") || e.includes("context length") || e.includes("too long")) {
         hints.push("The data passed to this step was too large for the AI to process in one go.");
-        hints.push("Try limiting the number of contacts from the previous step.");
     }
-    if (e.includes("no project") || e.includes("project not found") || e.includes("no workspace")) {
+    if (e.includes("no project") || e.includes("project not found")) {
         hints.push("This node isn't connected to a project. Open it and assign a project.");
     }
-    if (e.includes("chat") || e.includes("400") || e.includes("bad request")) {
-        hints.push("There was a problem communicating with the AI. This is usually temporary.");
-        hints.push("Try running the workflow again. If the problem persists, check the project's system instructions.");
+    if (e.includes("bdr not found")) {
+        hints.push("The BDR email wasn't found in the app. Make sure the BDR has an account or enable auto-creation.");
+    }
+    if (e.includes("dispatch failed")) {
+        hints.push("The async dispatch to the agent server failed. Check that the DeepAgent server is running.");
     }
     if (e.includes("auth") || e.includes("unauthorized") || e.includes("session")) {
         hints.push("Your login session may have expired. Try refreshing the page and logging in again.");
@@ -263,54 +249,48 @@ function getTroubleshootingHints(error: string, nodeLabel: string): string[] {
     return hints;
 }
 
-const stageColors = {
-    discovery: { bg: "bg-blue-500/15", text: "text-blue-400", border: "border-blue-500/30" },
-    validation: { bg: "bg-amber-500/15", text: "text-amber-400", border: "border-amber-500/30" },
-    outreach: { bg: "bg-emerald-500/15", text: "text-emerald-400", border: "border-emerald-500/30" },
-};
+function formatDuration(ms?: number): string {
+    if (!ms) return "";
+    if (ms < 1000) return `${ms}ms`;
+    const secs = Math.round(ms / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    return `${mins}m ${remSecs}s`;
+}
 
-const StageIcons = { discovery: Users, validation: Shield, outreach: Target };
+// ─── Pipeline Summary Bar ────────────────────────────────────────────
 
-const priorityConfig: Record<string, { color: string; bg: string }> = {
-    high: { color: "text-rose-400", bg: "bg-rose-500/15" },
-    critical: { color: "text-rose-400", bg: "bg-rose-500/15" },
-    medium: { color: "text-amber-400", bg: "bg-amber-500/15" },
-    low: { color: "text-emerald-400", bg: "bg-emerald-500/15" },
-};
-
-// ─── Pipeline Funnel ────────────────────────────────────────────────
-
-function PipelineFunnel({ stages }: { stages: PipelineStage[] }) {
-    const maxCount = Math.max(...stages.map((s) => s.contactCount), 1);
+function PipelineSummary({ stages }: { stages: PipelineStage[] }) {
+    const maxCount = Math.max(...stages.map((s) => s.itemCount), 1);
 
     return (
         <div className="px-4 py-4 border-b border-border/30">
             <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">Pipeline Summary</h4>
             <div className="flex items-center gap-2">
                 {stages.map((stage, i) => {
-                    const colors = stageColors[stage.icon];
-                    const Icon = StageIcons[stage.icon];
-                    const widthPct = Math.max((stage.contactCount / maxCount) * 100, 30);
+                    const isFailed = stage.status === "failed";
+                    const widthPct = Math.max((stage.itemCount / maxCount) * 100, 30);
 
                     return (
                         <div key={stage.nodeId} className="flex items-center gap-2 flex-1 min-w-0">
                             <div
-                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${
-                                    stage.status === "failed"
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all ${
+                                    isFailed
                                         ? "bg-rose-500/10 border-rose-500/30"
-                                        : `${colors.bg} ${colors.border}`
-                                } transition-all`}
+                                        : "bg-blue-500/10 border-blue-500/30"
+                                }`}
                                 style={{ width: `${widthPct}%`, minWidth: "fit-content" }}
                             >
-                                {stage.status === "failed" ? (
+                                {isFailed ? (
                                     <XCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
                                 ) : (
-                                    <Icon className={`h-3.5 w-3.5 ${colors.text} shrink-0`} />
+                                    <Database className="h-3.5 w-3.5 text-blue-400 shrink-0" />
                                 )}
                                 <div className="min-w-0">
                                     <p className="text-[10px] text-muted-foreground truncate">{stage.label}</p>
-                                    <p className={`text-sm font-bold ${stage.status === "failed" ? "text-rose-400" : colors.text}`}>
-                                        {stage.status === "failed" ? "Error" : stage.contactCount}
+                                    <p className={`text-sm font-bold ${isFailed ? "text-rose-400" : "text-blue-400"}`}>
+                                        {isFailed ? "Error" : stage.itemCount > 0 ? stage.itemCount : "✓"}
                                     </p>
                                 </div>
                             </div>
@@ -325,17 +305,7 @@ function PipelineFunnel({ stages }: { stages: PipelineStage[] }) {
     );
 }
 
-// ─── Per-Node Readable Summary ──────────────────────────────────────
-
-function formatDuration(ms?: number): string {
-    if (!ms) return "";
-    if (ms < 1000) return `${ms}ms`;
-    const secs = Math.round(ms / 1000);
-    if (secs < 60) return `${secs}s`;
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    return `${mins}m ${remSecs}s`;
-}
+// ─── Node Summary Cards ──────────────────────────────────────────────
 
 function NodeSummaryCards({ stages }: { stages: PipelineStage[] }) {
     const [expandedStage, setExpandedStage] = useState<string | null>(null);
@@ -344,7 +314,6 @@ function NodeSummaryCards({ stages }: { stages: PipelineStage[] }) {
         <div className="px-4 py-3 space-y-2 border-b border-border/30">
             <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">What Happened</h4>
             {stages.map((stage, i) => {
-                const colors = stageColors[stage.icon];
                 const isFailed = stage.status === "failed";
                 const isExpanded = expandedStage === stage.nodeId;
                 const displaySummary = stage.aiSummary || stage.summary;
@@ -362,12 +331,12 @@ function NodeSummaryCards({ stages }: { stages: PipelineStage[] }) {
                             onClick={() => hasFullText && setExpandedStage(isExpanded ? null : stage.nodeId)}
                         >
                             <div className={`mt-0.5 h-6 w-6 rounded-full flex items-center justify-center shrink-0 ${
-                                isFailed ? "bg-rose-500/15" : colors.bg
+                                isFailed ? "bg-rose-500/15" : "bg-emerald-500/15"
                             }`}>
                                 {isFailed ? (
                                     <XCircle className="h-3.5 w-3.5 text-rose-400" />
                                 ) : (
-                                    <CheckCircle2 className={`h-3.5 w-3.5 ${colors.text}`} />
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
                                 )}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -396,7 +365,6 @@ function NodeSummaryCards({ stages }: { stages: PipelineStage[] }) {
                             )}
                         </div>
 
-                        {/* Expanded: full AI response text */}
                         {isExpanded && stage.aiText && (
                             <div className="px-3 py-2.5 border-t border-border/20 bg-muted/5 animate-in fade-in duration-200">
                                 <p className="text-[10px] text-muted-foreground/50 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -415,13 +383,12 @@ function NodeSummaryCards({ stages }: { stages: PipelineStage[] }) {
     );
 }
 
-// ─── Error Panel ────────────────────────────────────────────────────
+// ─── Error Panel ─────────────────────────────────────────────────────
 
 function ErrorPanel({ stages, nodeLogs }: { stages: PipelineStage[]; nodeLogs: NodeLog[] }) {
     const errors = useMemo(() => {
         const errs: { nodeLabel: string; error: string; hints: string[] }[] = [];
 
-        // From stages
         for (const stage of stages) {
             if (stage.status === "failed" && stage.error) {
                 errs.push({
@@ -432,7 +399,6 @@ function ErrorPanel({ stages, nodeLogs }: { stages: PipelineStage[]; nodeLogs: N
             }
         }
 
-        // From nodeLogs (may have errors not in stages)
         for (const log of nodeLogs) {
             if (log.status === "failed" && log.error) {
                 const alreadyAdded = errs.some((e) => e.nodeLabel === log.label);
@@ -487,24 +453,42 @@ function ErrorPanel({ stages, nodeLogs }: { stages: PipelineStage[]; nodeLogs: N
     );
 }
 
-// ─── Smart Contact Table ────────────────────────────────────────────
+// ─── Smart Data Table (generic, auto-detects columns) ────────────────
 
-function ContactTable({ contacts }: { contacts: Contact[] }) {
+function SmartDataTable({ arrayKey, items }: { arrayKey: string; items: any[] }) {
     const [expandedRow, setExpandedRow] = useState<number | null>(null);
 
-    if (contacts.length === 0) return null;
+    if (items.length === 0) return null;
+
+    const label = getArrayLabel(arrayKey);
 
     return (
         <div>
             <div className="px-4 py-3 border-b border-border/30">
                 <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Contacts Ready — {contacts.length} total
+                    {label} — {items.length} total
                 </h4>
             </div>
             <div className="divide-y divide-border/20">
-                {contacts.map((contact, i) => {
+                {items.map((item, i) => {
                     const isExpanded = expandedRow === i;
-                    const pConfig = priorityConfig[(contact.priority || "").toLowerCase()] || priorityConfig.medium;
+                    const displayName = getItemDisplayName(item);
+                    const subtitle = getItemSubtitle(item);
+                    const initials = displayName
+                        ? displayName
+                              .split(/[\s@.]+/)
+                              .map((w: string) => w[0])
+                              .filter(Boolean)
+                              .slice(0, 2)
+                              .join("")
+                              .toUpperCase()
+                        : `${i + 1}`;
+
+                    // Get extra fields for expanded view (skip name/title/subtitle fields)
+                    const skipKeys = new Set(["name", "full_name", "firstName", "lastName", "title", "role", "company", "company_name", "organization"]);
+                    const extraFields = Object.entries(item).filter(
+                        ([k, v]) => !skipKeys.has(k) && v !== null && v !== undefined && v !== ""
+                    );
 
                     return (
                         <div key={i} className="px-4 py-3 hover:bg-muted/10 transition-colors">
@@ -512,64 +496,45 @@ function ContactTable({ contacts }: { contacts: Contact[] }) {
                                 className="flex items-start gap-3 cursor-pointer"
                                 onClick={() => setExpandedRow(isExpanded ? null : i)}
                             >
-                                {/* Avatar */}
                                 <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                                    <span className="text-xs font-bold text-primary">
-                                        {contact.name
-                                            .split(" ")
-                                            .map((w: string) => w[0])
-                                            .slice(0, 2)
-                                            .join("")
-                                            .toUpperCase()}
-                                    </span>
+                                    <span className="text-xs font-bold text-primary">{initials}</span>
                                 </div>
 
-                                {/* Info */}
                                 <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm font-medium truncate">{contact.name}</span>
-                                        {contact.priority && (
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${pConfig.color} ${pConfig.bg}`}>
-                                                {contact.priority}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <p className="text-xs text-muted-foreground truncate">
-                                        {contact.title}{contact.title && contact.company ? " at " : ""}{contact.company}
-                                    </p>
-
-                                    {/* Quick badges */}
+                                    <span className="text-sm font-medium truncate block">
+                                        {displayName || `Item ${i + 1}`}
+                                    </span>
+                                    {subtitle && (
+                                        <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
+                                    )}
+                                    {/* Show key badges inline */}
                                     <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                                        {contact.email && (
+                                        {item.email && (
                                             <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                                                {contact.email_verified ? (
-                                                    <ShieldCheck className="h-3 w-3 text-emerald-500" />
-                                                ) : (
-                                                    <Mail className="h-3 w-3" />
-                                                )}
-                                                <span className="truncate max-w-[140px]">{contact.email}</span>
+                                                <Send className="h-3 w-3" />
+                                                <span className="truncate max-w-[160px]">{item.email}</span>
                                             </span>
                                         )}
-                                        {contact.linkedin_url && (
-                                            <a
-                                                href={contact.linkedin_url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="inline-flex items-center gap-1 text-[10px] text-blue-400 hover:text-blue-300"
-                                                onClick={(e) => e.stopPropagation()}
-                                            >
-                                                <Linkedin className="h-3 w-3" />
-                                                LinkedIn
-                                                <ExternalLink className="h-2.5 w-2.5" />
-                                            </a>
+                                        {item.status && (
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                                item.status === "active" || item.status === "success"
+                                                    ? "text-emerald-400 bg-emerald-500/15"
+                                                    : item.status === "failed" || item.status === "error"
+                                                    ? "text-rose-400 bg-rose-500/15"
+                                                    : "text-amber-400 bg-amber-500/15"
+                                            }`}>
+                                                {item.status}
+                                            </span>
                                         )}
-                                        {contact.phone && (
-                                            <span className="text-[10px] text-muted-foreground">{contact.phone}</span>
+                                        {item.score !== undefined && (
+                                            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                                                <Hash className="h-3 w-3" />
+                                                {item.score}
+                                            </span>
                                         )}
                                     </div>
                                 </div>
 
-                                {/* Expand */}
                                 <div className="shrink-0 mt-1">
                                     {isExpanded ? (
                                         <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
@@ -579,56 +544,33 @@ function ContactTable({ contacts }: { contacts: Contact[] }) {
                                 </div>
                             </div>
 
-                            {/* Expanded detail */}
-                            {isExpanded && (
-                                <div className="mt-3 ml-11 space-y-2 animate-in fade-in duration-200">
-                                    {contact.outreach_snippet && (
-                                        <div className="rounded-md bg-muted/20 border border-border/20 p-3">
-                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1 flex items-center gap-1">
-                                                <MessageSquare className="h-3 w-3" />
-                                                Draft Message
-                                            </p>
-                                            <p className="text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed">
-                                                {contact.outreach_snippet}
-                                            </p>
+                            {isExpanded && extraFields.length > 0 && (
+                                <div className="mt-3 ml-11 space-y-1.5 animate-in fade-in duration-200">
+                                    {extraFields.map(([key, value]) => (
+                                        <div key={key} className="flex items-start gap-2 text-[11px]">
+                                            <span className="text-muted-foreground shrink-0 capitalize min-w-[80px]">
+                                                {key.replace(/_/g, " ")}:
+                                            </span>
+                                            <span className="text-foreground/80 break-all">
+                                                {typeof value === "string" && value.startsWith("http") ? (
+                                                    <a
+                                                        href={value}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="text-blue-400 hover:underline"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        {value}
+                                                        <ExternalLink className="h-2.5 w-2.5 inline ml-1" />
+                                                    </a>
+                                                ) : typeof value === "object" ? (
+                                                    JSON.stringify(value).slice(0, 200)
+                                                ) : (
+                                                    String(value)
+                                                )}
+                                            </span>
                                         </div>
-                                    )}
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {contact.score !== undefined && (
-                                            <div className="text-[11px] flex items-center gap-1">
-                                                <span className="text-muted-foreground">Relevance Score:</span>
-                                                <span className="font-medium">{contact.score}/10</span>
-                                            </div>
-                                        )}
-                                        {contact.linkedin_validated !== undefined && (
-                                            <div className="text-[11px] flex items-center gap-1">
-                                                <span className="text-muted-foreground">LinkedIn:</span>
-                                                {contact.linkedin_validated ? (
-                                                    <span className="text-emerald-400 flex items-center gap-0.5">
-                                                        <ShieldCheck className="h-3 w-3" /> Verified
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-rose-400 flex items-center gap-0.5">
-                                                        <ShieldX className="h-3 w-3" /> Not found
-                                                    </span>
-                                                )}
-                                            </div>
-                                        )}
-                                        {contact.email_verified !== undefined && (
-                                            <div className="text-[11px] flex items-center gap-1">
-                                                <span className="text-muted-foreground">Email:</span>
-                                                {contact.email_verified ? (
-                                                    <span className="text-emerald-400 flex items-center gap-0.5">
-                                                        <ShieldCheck className="h-3 w-3" /> Verified
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-amber-400 flex items-center gap-0.5">
-                                                        <Info className="h-3 w-3" /> Unverified
-                                                    </span>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
+                                    ))}
                                 </div>
                             )}
                         </div>
@@ -639,7 +581,7 @@ function ContactTable({ contacts }: { contacts: Contact[] }) {
     );
 }
 
-// ─── Raw JSON View (toggleable) ─────────────────────────────────────
+// ─── Raw JSON View ───────────────────────────────────────────────────
 
 function RawJsonView({ data, label }: { data: any; label?: string }) {
     const [copied, setCopied] = useState(false);
@@ -671,7 +613,7 @@ function RawJsonView({ data, label }: { data: any; label?: string }) {
     );
 }
 
-// ─── Readable Output (non-contact fallback) ─────────────────────────
+// ─── Readable Output (structured data fallback) ──────────────────────
 
 function ReadableOutput({ structured, text }: { structured: any; text?: string }) {
     if (!structured && !text) return null;
@@ -743,14 +685,14 @@ function ReadableOutput({ structured, text }: { structured: any; text?: string }
     );
 }
 
-// ─── Action Bar ─────────────────────────────────────────────────────
+// ─── Action Bar (generic) ────────────────────────────────────────────
 
 function ActionBar({
-    contacts,
+    arrayData,
     structuredData,
     onRerun,
 }: {
-    contacts: Contact[];
+    arrayData: { key: string; items: any[] } | null;
     structuredData: any;
     onRerun?: () => void;
 }) {
@@ -758,9 +700,17 @@ function ActionBar({
     const [copiedJson, setCopiedJson] = useState(false);
 
     const copyAsCsv = () => {
-        if (contacts.length === 0) return;
-        const headers = ["Name", "Title", "Company", "Email", "LinkedIn", "Phone", "Priority"];
-        const rows = contacts.map((c) => [c.name, c.title, c.company, c.email || "", c.linkedin_url || "", c.phone || "", c.priority || ""]);
+        if (!arrayData || arrayData.items.length === 0) return;
+        // Auto-detect columns from first item
+        const headers = Object.keys(arrayData.items[0]).filter(
+            (k) => typeof arrayData.items[0][k] !== "object" || arrayData.items[0][k] === null
+        );
+        const rows = arrayData.items.map((item) =>
+            headers.map((h) => {
+                const v = item[h];
+                return v === null || v === undefined ? "" : String(v);
+            })
+        );
         const csv = [headers.join(","), ...rows.map((r) => r.map((v) => `"${(v || "").replace(/"/g, '""')}"`).join(","))].join("\n");
         navigator.clipboard.writeText(csv);
         setCopiedCsv(true);
@@ -775,7 +725,7 @@ function ActionBar({
 
     return (
         <div className="border-t border-border/30 px-4 py-3 flex items-center gap-2 bg-background/80 backdrop-blur-sm">
-            {contacts.length > 0 && (
+            {arrayData && arrayData.items.length > 0 && (
                 <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" onClick={copyAsCsv}>
                     {copiedCsv ? <Check className="h-3 w-3 text-emerald-500" /> : <Download className="h-3 w-3" />}
                     Copy CSV
@@ -788,10 +738,6 @@ function ActionBar({
                 </Button>
             )}
             <div className="flex-1" />
-            <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5 opacity-50 cursor-not-allowed" disabled title="Coming soon">
-                <Zap className="h-3 w-3" />
-                Push to Lemlist
-            </Button>
             {onRerun && (
                 <Button variant="default" size="sm" className="h-7 text-xs gap-1.5" onClick={onRerun}>
                     <Play className="h-3 w-3" />
@@ -802,7 +748,7 @@ function ActionBar({
     );
 }
 
-// ─── Main Component ─────────────────────────────────────────────────
+// ─── Main Component ──────────────────────────────────────────────────
 
 export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRerun }: WorkflowResultsPanelProps) {
     const [viewMode, setViewMode] = useState<"pretty" | "json">("pretty");
@@ -812,26 +758,24 @@ export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRe
         [nodeOrder]
     );
 
-    // Build pipeline stages with summaries
+    // Build pipeline stages with generic summaries
     const stages: PipelineStage[] = useMemo(() => {
-        return projectNodes.map((node, i) => {
+        return projectNodes.map((node) => {
             const runData = nodeRunDataMap[node.id];
             const structured = runData?.output?.structured;
             const text = runData?.output?.text || "";
-            const count = extractContactCount(structured);
-            const stageType = getStageIcon(i, projectNodes.length);
+            const count = extractItemCount(structured);
             const nodeLog = nodeLogs.find((l) => l.nodeId === node.id);
             const isFailed = nodeLog?.status === "failed";
 
             return {
                 nodeId: node.id,
                 label: node.label,
-                contactCount: count,
-                icon: stageType,
+                itemCount: count,
                 status: isFailed ? "failed" as const : "completed" as const,
                 summary: isFailed
                     ? `Failed: ${nodeLog?.error || "Unknown error"}`
-                    : generateNodeSummary(node.label, structured, text, stageType),
+                    : generateNodeSummary(node.label, structured, text),
                 error: nodeLog?.error,
                 durationMs: nodeLog?.durationMs,
                 aiSummary: nodeLog?.aiSummary || undefined,
@@ -845,10 +789,10 @@ export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRe
     const finalRunData = finalNode ? nodeRunDataMap[finalNode.id] : null;
     const finalStructured = finalRunData?.output?.structured;
     const finalText = finalRunData?.output?.text || "";
-    const finalContacts = useMemo(() => extractContacts(finalStructured), [finalStructured]);
+    const finalArrayData = useMemo(() => detectArrayData(finalStructured), [finalStructured]);
 
     const hasErrors = stages.some((s) => s.status === "failed") || nodeLogs.some((l) => l.status === "failed");
-    const hasAnyData = stages.some((s) => s.contactCount > 0) || finalStructured || hasErrors;
+    const hasAnyData = stages.some((s) => s.itemCount > 0) || finalStructured || hasErrors;
 
     if (!hasAnyData) {
         return (
@@ -907,7 +851,6 @@ export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRe
             {/* Scrollable content area */}
             <div className="flex-1 min-h-0 overflow-y-auto">
                 {viewMode === "json" ? (
-                    /* JSON VIEW */
                     <RawJsonView
                         data={Object.fromEntries(
                             projectNodes.map((n) => [
@@ -921,27 +864,28 @@ export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRe
                         label="Full Pipeline Data"
                     />
                 ) : (
-                    /* PRETTY VIEW */
                     <div className="flex flex-col">
-                        {/* Errors first — most important */}
+                        {/* Errors first */}
                         {hasErrors && <ErrorPanel stages={stages} nodeLogs={nodeLogs} />}
 
-                        {/* Funnel */}
-                        {stages.some((s) => s.contactCount > 0) && (
-                            <PipelineFunnel stages={stages} />
+                        {/* Pipeline summary bar */}
+                        {stages.some((s) => s.itemCount > 0) && (
+                            <PipelineSummary stages={stages} />
                         )}
 
-                        {/* Readable step-by-step summaries */}
+                        {/* Step-by-step summaries */}
                         <NodeSummaryCards stages={stages} />
 
-                        {/* Smart contact table or readable fallback */}
-                        {finalContacts.length > 0 ? (
-                            <ContactTable contacts={finalContacts} />
+                        {/* Smart data display — auto-detects array data or falls back to readable */}
+                        {finalArrayData ? (
+                            <SmartDataTable arrayKey={finalArrayData.key} items={finalArrayData.items} />
                         ) : finalStructured ? (
                             <ReadableOutput structured={finalStructured} text={finalText} />
-                        ) : !hasErrors ? (
-                            <div className="py-8 flex items-center justify-center">
-                                <p className="text-xs text-muted-foreground">No contact data in the final output</p>
+                        ) : !hasErrors && finalText ? (
+                            <div className="p-4">
+                                <CompactMarkdown className="text-sm text-foreground/80">
+                                    {finalText}
+                                </CompactMarkdown>
                             </div>
                         ) : null}
                     </div>
@@ -949,7 +893,7 @@ export function WorkflowResultsPanel({ nodeRunDataMap, nodeOrder, nodeLogs, onRe
             </div>
 
             {/* Actions - pinned to bottom */}
-            <ActionBar contacts={finalContacts} structuredData={finalStructured} onRerun={onRerun} />
+            <ActionBar arrayData={finalArrayData} structuredData={finalStructured} onRerun={onRerun} />
         </div>
     );
 }
