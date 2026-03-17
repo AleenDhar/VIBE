@@ -143,7 +143,7 @@ Please use this context to personalize your responses.`;
         let systemPrompt = `${basePrompt}\n\n## User Context\n${userContextStr}\n\n`;
 
         // 2.6 Enforce Model Access Permissions
-        let finalModel = model || "anthropic:claude-haiku-4-5"; // Default fallback
+        let finalModel = model || "openai:gpt-5-mini"; // Default fallback
 
         try {
             // 1. Fetch the requested model from the database to check its properties

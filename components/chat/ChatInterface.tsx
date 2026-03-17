@@ -218,7 +218,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
     const [isRecording, setIsRecording] = useState(false);
-    const [model, setModel] = useState(initialModel || "anthropic:claude-haiku-4-5");
+    const [model, setModel] = useState(initialModel || "openai:gpt-5-mini");
     const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);

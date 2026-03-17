@@ -478,7 +478,7 @@ async function executeProjectNode(
             chatId,
             content: prompt,
             previousMessages: [],
-            model: node.data.model || "anthropic:claude-haiku-4-5",
+            model: node.data.model || "openai:gpt-5-mini",
         }),
     });
 

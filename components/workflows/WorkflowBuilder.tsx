@@ -689,7 +689,7 @@ export function WorkflowBuilder({ workflow, projects, models }: WorkflowBuilderP
                                     <button
                                         key={m.id}
                                         className={`w-full text-left px-2 py-1.5 rounded text-sm transition-colors ${
-                                            ((selectedNode.data as any).model || "anthropic:claude-haiku-4-5") === m.id
+                                            ((selectedNode.data as any).model || "openai:gpt-5-mini") === m.id
                                                 ? "bg-primary/10 text-primary"
                                                 : "text-muted-foreground hover:text-foreground hover:bg-accent"
                                         }`}

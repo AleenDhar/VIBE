@@ -16,7 +16,7 @@ import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/mo
 import { getCurrentUserRole } from "@/lib/actions/admin";
 
 // Fallback initial model to prevent undefined errors before fetch completes
-const FALLBACK_MODEL = { id: "anthropic:claude-haiku-4-5", name: "Loading...", provider: "anthropic", is_available_to_all: true, is_active: true };
+const FALLBACK_MODEL = { id: "openai:gpt-5-mini", name: "Loading...", provider: "openai", is_available_to_all: true, is_active: true };
 
 function getGreeting(): string {
     const hour = new Date().getHours();

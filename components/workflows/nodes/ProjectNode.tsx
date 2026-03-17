@@ -10,7 +10,7 @@ function ProjectNodeComponent({ data, selected }: NodeProps) {
     const nodeData = data as any;
     const status: NodeStatus = nodeData.status || "idle";
     const projectName = nodeData.projectName || "Select Project";
-    const modelId: string = nodeData.model || "anthropic:claude-haiku-4-5";
+    const modelId: string = nodeData.model || "openai:gpt-5-mini";
     const modelLabel = nodeData.modelName || modelId.split(":").pop()?.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()) || modelId;
 
     const statusStyles: Record<NodeStatus, string> = {
