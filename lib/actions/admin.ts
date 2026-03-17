@@ -286,6 +286,41 @@ export async function getChatMessagesForOmnivision(chatId: string) {
     return data || [];
 }
 
+// 7. Search messages across all chats (Omnivision)
+export interface MessageSearchResult {
+    message_id: string;
+    chat_id: string;
+    role: string;
+    content: string;
+    type: string;
+    created_at: string;
+    chat_title: string | null;
+    project_id: string | null;
+    user_id: string;
+    username: string | null;
+    full_name: string | null;
+}
+
+export async function searchOmnivisionMessages(query: string): Promise<MessageSearchResult[]> {
+    const isSuperAdmin = await verifySuperAdmin();
+    if (!isSuperAdmin) return [];
+
+    if (!query || query.trim().length < 2) return [];
+
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc("search_omnivision_messages", {
+        query_text: query.trim(),
+        result_limit: 50,
+    });
+
+    if (error) {
+        console.error("Error searching messages:", error);
+        return [];
+    }
+
+    return (data || []) as MessageSearchResult[];
+}
+
 // 4. API Key Management
 export async function getApiKeys() {
     const isAdmin = await verifyAdmin();
