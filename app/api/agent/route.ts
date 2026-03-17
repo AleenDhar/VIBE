@@ -35,6 +35,17 @@ function normalizeModel(model: string): string {
         "gpt-5-mini": "openai:gpt-5-mini",
         "claude-sonnet-4-5": "anthropic:claude-sonnet-4-5",
         "claude-sonnet-4-6": "anthropic:claude-sonnet-4-6",
+        "grok-3": "grok:grok-3",
+        "grok-3-mini": "grok:grok-3-mini",
+        "grok-4": "grok:grok-4-0709",
+        "grok-4-0709": "grok:grok-4-0709",
+        "grok-4-fast": "grok:grok-4-fast-non-reasoning",
+        "grok-4-fast-non-reasoning": "grok:grok-4-fast-non-reasoning",
+        "grok-4-fast-reasoning": "grok:grok-4-fast-reasoning",
+        "grok-4-1-fast-non-reasoning": "grok:grok-4-1-fast-non-reasoning",
+        "grok-4-1-fast-reasoning": "grok:grok-4-1-fast-reasoning",
+        "grok-4.20-beta-0309-non-reasoning": "grok:grok-4.20-beta-0309-non-reasoning",
+        "grok-4.20-beta-0309-reasoning": "grok:grok-4.20-beta-0309-reasoning",
     };
 
     if (mapping[model]) return mapping[model];
