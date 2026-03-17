@@ -614,10 +614,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 .select('*')
                 .eq('chat_id', chatId)
                 .eq('role', 'assistant')
-                .or('type.eq.message,type.eq.final,type.is.null') // Only fetch final messages, not thinking steps
                 .order('created_at', { ascending: false })
                 .limit(1)
-                .single();
+                .maybeSingle();
 
             if (error) {
                 console.error('[Polling] Error fetching messages:', error);
