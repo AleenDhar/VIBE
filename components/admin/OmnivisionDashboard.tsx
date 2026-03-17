@@ -1,14 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import {
     Eye, Search, MessageSquare, User, ChevronDown, ChevronRight,
-    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2
+    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2, X, FileSearch
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { UserAggregate, getOmnivisionChatsForUser } from "@/lib/actions/admin";
+import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult } from "@/lib/actions/admin";
 
 interface OmnivisionChat {
     id: string;
@@ -51,6 +51,58 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
         }
         return init;
     });
+
+    // ── Message search state ────────────────────────────────────────────
+    const [msgSearchQuery, setMsgSearchQuery] = useState("");
+    const [msgSearchResults, setMsgSearchResults] = useState<MessageSearchResult[]>([]);
+    const [msgSearchLoading, setMsgSearchLoading] = useState(false);
+    const [showMsgSearch, setShowMsgSearch] = useState(false);
+    const msgSearchTimer = useRef<NodeJS.Timeout | null>(null);
+
+    const handleMsgSearch = useCallback((value: string) => {
+        setMsgSearchQuery(value);
+        if (msgSearchTimer.current) clearTimeout(msgSearchTimer.current);
+
+        if (value.trim().length < 2) {
+            setMsgSearchResults([]);
+            setMsgSearchLoading(false);
+            return;
+        }
+
+        setMsgSearchLoading(true);
+        msgSearchTimer.current = setTimeout(async () => {
+            try {
+                const results = await searchOmnivisionMessages(value);
+                setMsgSearchResults(results);
+            } catch (err) {
+                console.error("Message search failed:", err);
+                setMsgSearchResults([]);
+            } finally {
+                setMsgSearchLoading(false);
+            }
+        }, 400);
+    }, []);
+
+    const highlightMatch = (text: string, query: string) => {
+        if (!query || query.length < 2) return text;
+        const idx = text.toLowerCase().indexOf(query.toLowerCase());
+        if (idx === -1) return text;
+        return (
+            <>
+                {text.slice(0, idx)}
+                <mark className="bg-amber-500/30 text-foreground rounded-sm px-0.5">{text.slice(idx, idx + query.length)}</mark>
+                {text.slice(idx + query.length)}
+            </>
+        );
+    };
+
+    const getSnippet = (content: string, query: string, maxLen: number = 150) => {
+        const idx = content.toLowerCase().indexOf(query.toLowerCase());
+        if (idx === -1) return content.slice(0, maxLen);
+        const start = Math.max(0, idx - 50);
+        const end = Math.min(content.length, idx + query.length + 80);
+        return (start > 0 ? "…" : "") + content.slice(start, end) + (end < content.length ? "…" : "");
+    };
 
     const allUsers = Object.values(users).sort((a, b) => Number(b.chat_count) - Number(a.chat_count));
 
@@ -230,6 +282,19 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                                 className="w-full bg-muted/30 border border-border/20 rounded-xl py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-muted-foreground/30"
                             />
                         </div>
+                        <button
+                            onClick={() => setShowMsgSearch(prev => !prev)}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-colors",
+                                showMsgSearch
+                                    ? "bg-amber-500/15 border-amber-500/30 text-amber-500"
+                                    : "bg-muted/30 border-border/20 text-muted-foreground hover:text-foreground hover:border-border/40"
+                            )}
+                            title="Search message content"
+                        >
+                            <FileSearch className="h-4 w-4" />
+                            <span className="hidden sm:inline">Messages</span>
+                        </button>
                         <div className="relative flex items-center">
                             <Filter className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground/40 pointer-events-none" />
                             <select
@@ -244,6 +309,90 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                             </select>
                         </div>
                     </div>
+
+                    {/* ── Message content search panel ─────────────────── */}
+                    {showMsgSearch && (
+                        <div className="bg-muted/20 border border-border/20 rounded-xl p-3 space-y-3">
+                            <div className="relative">
+                                <FileSearch className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-amber-500/50 pointer-events-none" />
+                                <input
+                                    type="text"
+                                    placeholder="Search inside all message content…"
+                                    value={msgSearchQuery}
+                                    onChange={e => handleMsgSearch(e.target.value)}
+                                    className="w-full bg-background/60 border border-amber-500/20 rounded-lg py-2 pl-9 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/30 placeholder:text-muted-foreground/30"
+                                    autoFocus
+                                />
+                                {msgSearchQuery && (
+                                    <button
+                                        onClick={() => { setMsgSearchQuery(""); setMsgSearchResults([]); }}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                )}
+                            </div>
+
+                            {/* Results */}
+                            {msgSearchLoading && (
+                                <div className="flex items-center justify-center py-4 text-muted-foreground/50">
+                                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                    <span className="text-xs">Searching messages…</span>
+                                </div>
+                            )}
+
+                            {!msgSearchLoading && msgSearchQuery.length >= 2 && msgSearchResults.length === 0 && (
+                                <div className="text-center py-4 text-muted-foreground/40 text-xs">
+                                    No messages found
+                                </div>
+                            )}
+
+                            {!msgSearchLoading && msgSearchResults.length > 0 && (
+                                <div className="space-y-1 max-h-80 overflow-y-auto">
+                                    <p className="text-[10px] text-muted-foreground/40 px-1 mb-1">
+                                        {msgSearchResults.length} result{msgSearchResults.length !== 1 ? "s" : ""} found
+                                    </p>
+                                    {msgSearchResults.map(result => (
+                                        <Link
+                                            key={result.message_id}
+                                            href={result.project_id ? `/projects/${result.project_id}/chat/${result.chat_id}` : `/chat/${result.chat_id}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="block px-3 py-2.5 rounded-lg hover:bg-amber-500/5 group transition-colors border border-transparent hover:border-amber-500/10"
+                                        >
+                                            <div className="flex items-center justify-between mb-1">
+                                                <div className="flex items-center gap-2 min-w-0">
+                                                    <span className="text-xs font-medium text-foreground/70 truncate">
+                                                        {result.full_name || result.username || "Unknown"}
+                                                    </span>
+                                                    <span className="text-[10px] text-muted-foreground/30">·</span>
+                                                    <span className="text-[10px] text-muted-foreground/40 truncate">
+                                                        {result.chat_title || "Untitled Chat"}
+                                                    </span>
+                                                </div>
+                                                <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                                                    <span className={cn(
+                                                        "text-[10px] px-1.5 py-0.5 rounded-md",
+                                                        result.role === "user" ? "bg-blue-500/10 text-blue-400" : "bg-emerald-500/10 text-emerald-400"
+                                                    )}>
+                                                        {result.role}
+                                                    </span>
+                                                    <ExternalLink className="h-3 w-3 text-muted-foreground/20 group-hover:text-amber-500 transition-colors" />
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground/60 leading-relaxed line-clamp-2">
+                                                {highlightMatch(getSnippet(result.content, msgSearchQuery), msgSearchQuery)}
+                                            </p>
+                                            <p className="text-[10px] text-muted-foreground/30 mt-1 flex items-center gap-1">
+                                                <Clock className="h-2.5 w-2.5" />
+                                                {formatDistanceToNow(new Date(result.created_at))} ago
+                                            </p>
+                                        </Link>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
