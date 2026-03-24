@@ -17,6 +17,7 @@ import { exportToPDF, exportToDocx } from "@/lib/export-utils";
 import { extractBehavioralInstructions } from "@/lib/actions/instructions";
 import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
 import { getCurrentUserRole } from "@/lib/actions/admin";
+import { UsagePill } from "@/components/chat/UsagePill";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -226,6 +227,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
+    const [showUsage, setShowUsage] = useState(false);
     const userScrolledUp = useRef(false);
     const router = useRouter();
     // Refs
@@ -657,6 +659,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
         const imagesToSend = overrideImages || [...pendingImages];
         setPendingImages([]);
+        setShowUsage(false);
 
         let finalMessageContent = messageContent;
         if (pendingDocuments.length > 0) {
@@ -794,9 +797,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         if (data.content && data.content.length > (lastMsg.content || "").length) {
                                             newMessages[lastMsgIndex].content = data.content;
                                         }
+                                        setShowUsage(true);
                                     } else if (data.type === 'error') {
                                         newMessages[lastMsgIndex].content += `\n\nError: ${data.content}`;
                                         newMessages[lastMsgIndex].isProcessing = false;
+                                        setShowUsage(true);
                                     } else if (data.type === 'cancelled') {
                                         setLoading(false);
                                         setThinkingText("");
@@ -1532,6 +1537,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     </button>
                 </div>
             )}
+
+            <UsagePill chatId={chatId} visible={showUsage} />
 
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
                 <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all flex flex-col">
