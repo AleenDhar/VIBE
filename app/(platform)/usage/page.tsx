@@ -17,6 +17,12 @@ interface UsageRow {
   updated_at: string;
 }
 
+interface ChatInfo {
+  userName: string;
+  projectName: string;
+  chatTitle: string;
+}
+
 interface UsageTotals {
   input_tokens: number;
   output_tokens: number;
@@ -37,7 +43,9 @@ export default function UsagePage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
+  const [chatInfoMap, setChatInfoMap] = useState<Record<string, ChatInfo>>({});
   const router = useRouter();
+  const supabase = createClient();
 
   // Auth check
   useEffect(() => {
@@ -80,9 +88,54 @@ export default function UsagePage() {
     }
   };
 
+  const enrichChatInfo = async (usageRows: UsageRow[]) => {
+    if (usageRows.length === 0) return;
+    const chatIds = usageRows.map((r) => r.chat_id);
+    try {
+      // Get chats with project names (direct FK exists: chats.project_id → projects.id)
+      const { data: chats } = await supabase
+        .from("chats")
+        .select("id, title, user_id, project_id, projects:project_id(name)")
+        .in("id", chatIds);
+
+      if (!chats || chats.length === 0) return;
+
+      // Get unique user_ids and fetch profiles separately (no direct FK from chats to profiles)
+      const userIds = [...new Set((chats as any[]).map((c) => c.user_id).filter(Boolean))];
+      const profileMap: Record<string, string> = {};
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .in("id", userIds);
+        if (profiles) {
+          for (const p of profiles) {
+            profileMap[p.id] = p.full_name || "Unknown";
+          }
+        }
+      }
+
+      const map: Record<string, ChatInfo> = {};
+      for (const chat of chats as any[]) {
+        map[chat.id] = {
+          userName: profileMap[chat.user_id] || "Unknown",
+          projectName: chat.projects?.name || "—",
+          chatTitle: chat.title || "New Chat",
+        };
+      }
+      setChatInfoMap(map);
+    } catch (err) {
+      console.error("[UsagePage] Error enriching chat info:", err);
+    }
+  };
+
   useEffect(() => {
     if (authorized) fetchUsage(page, pageSize);
   }, [authorized, page, pageSize]);
+
+  useEffect(() => {
+    if (rows.length > 0) enrichChatInfo(rows);
+  }, [rows]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -167,6 +220,9 @@ export default function UsagePage() {
             <thead className="bg-muted/50 border-b">
               <tr>
                 <SortHeader label="Chat ID" field="chat_id" />
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">User</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Project</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Chat Title</th>
                 <SortHeader label="Model" field="model" />
                 <SortHeader label="Input Tokens" field="input_tokens" />
                 <SortHeader label="Output Tokens" field="output_tokens" />
@@ -181,6 +237,9 @@ export default function UsagePage() {
                   <td className="px-4 py-3 text-sm font-mono text-muted-foreground">
                     {row.chat_id.slice(0, 8)}...
                   </td>
+                  <td className="px-4 py-3 text-sm">{chatInfoMap[row.chat_id]?.userName || "—"}</td>
+                  <td className="px-4 py-3 text-sm">{chatInfoMap[row.chat_id]?.projectName || "—"}</td>
+                  <td className="px-4 py-3 text-sm max-w-[200px] truncate" title={chatInfoMap[row.chat_id]?.chatTitle}>{chatInfoMap[row.chat_id]?.chatTitle || "—"}</td>
                   <td className="px-4 py-3 text-sm">{formatModelName(row.model)}</td>
                   <td className="px-4 py-3 text-sm tabular-nums">{formatTokenCount(row.input_tokens)}</td>
                   <td className="px-4 py-3 text-sm tabular-nums">{formatTokenCount(row.output_tokens)}</td>
@@ -193,7 +252,7 @@ export default function UsagePage() {
               ))}
               {sortedRows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">
                     No usage data available
                   </td>
                 </tr>
@@ -202,7 +261,7 @@ export default function UsagePage() {
             {totals && sortedRows.length > 0 && (
               <tfoot className="bg-muted/30 border-t-2 font-medium">
                 <tr>
-                  <td className="px-4 py-3 text-sm" colSpan={2}>Totals</td>
+                  <td className="px-4 py-3 text-sm" colSpan={5}>Totals</td>
                   <td className="px-4 py-3 text-sm tabular-nums">{formatTokenCount(totals.input_tokens)}</td>
                   <td className="px-4 py-3 text-sm tabular-nums">{formatTokenCount(totals.output_tokens)}</td>
                   <td className="px-4 py-3 text-sm tabular-nums">{formatTokenCount(totals.total_tokens)}</td>
