@@ -710,7 +710,20 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             });
 
             if (!response.ok) {
-                throw new Error(await response.text());
+                const errText = await response.text();
+                // Handle spending cap error specifically
+                if (response.status === 429) {
+                    try {
+                        const errJson = JSON.parse(errText);
+                        throw new Error(errJson.error || "Daily spending limit reached.");
+                    } catch (parseErr) {
+                        if (parseErr instanceof SyntaxError) {
+                            throw new Error(errText || "Daily spending limit reached.");
+                        }
+                        throw parseErr;
+                    }
+                }
+                throw new Error(errText);
             }
 
             const reader = response.body?.getReader();
@@ -819,6 +832,15 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     }
                 }
                 console.log("[ChatInterface] Stream finished.");
+
+                // Track spend after stream completes (server computes delta)
+                fetch("/api/usage/track-spend", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: chatId }),
+                }).catch(trackErr => {
+                    console.error("[ChatInterface] Spend tracking error:", trackErr);
+                });
             }
             setLoading(false);
 

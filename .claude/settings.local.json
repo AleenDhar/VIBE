@@ -15,7 +15,9 @@
       "Bash(npx tsc:*)",
       "Bash(npx next:*)",
       "Bash(xargs grep:*)",
-      "mcp__Claude_in_Chrome__tabs_context_mcp"
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(git pull:*)",
+      "Bash(find /c/Users/aleen/OneDrive/Desktop/deal-intellegence -name migrations -o -name schema.sql -o -name *.sql)"
     ]
   }
 }

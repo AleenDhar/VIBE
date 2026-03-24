@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateEmbeddings } from "@/lib/rag-utils";
+import { getISTSpendDate } from "@/lib/spend-utils";
 
 export const dynamic = 'force-dynamic';
 
@@ -21,6 +22,46 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // ── Spending Cap Check ──────────────────────────────────────────
+    try {
+        const { data: capProfile } = await supabase
+            .from("profiles")
+            .select("daily_spend_cap")
+            .eq("id", user.id)
+            .single();
+
+        // Per-user cap takes priority; otherwise use global default
+        let effectiveCap = capProfile?.daily_spend_cap;
+        if (effectiveCap === null || effectiveCap === undefined) {
+            const { data: globalSetting } = await supabase
+                .from("app_config")
+                .select("value")
+                .eq("key", "default_daily_credit")
+                .single();
+            effectiveCap = globalSetting ? Number(globalSetting.value) : null;
+        }
+
+        if (effectiveCap !== null && effectiveCap !== undefined && Number(effectiveCap) > 0) {
+            const spendDate = getISTSpendDate();
+            const { data: spendRow } = await supabase
+                .from("user_daily_spend")
+                .select("total_cost")
+                .eq("user_id", user.id)
+                .eq("spend_date", spendDate)
+                .single();
+
+            const todaySpend = Number(spendRow?.total_cost) || 0;
+            if (todaySpend >= Number(effectiveCap)) {
+                return NextResponse.json(
+                    { error: `Daily spending limit of $${Number(effectiveCap).toFixed(2)} reached. Your limit resets at 4:00 AM IST. Please contact an admin to increase your limit.` },
+                    { status: 429 }
+                );
+            }
+        }
+    } catch (capErr) {
+        // Fail open: if cap check fails, allow the request
+        console.error("[API] Cap check error (allowing):", capErr);
+    }
 
     try {
         const { projectId, chatId: rawChatId, content, previousMessages, model, images } = await req.json();

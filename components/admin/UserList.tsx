@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { updateUserRole, updateUserAllowedModels } from "@/lib/actions/admin";
-import { User, ShieldCheck, Crown, Mail, Cpu } from "lucide-react";
+import { User, ShieldCheck, Crown, Mail, Cpu, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
@@ -21,6 +21,60 @@ export function UserList({ initialUsers, currentUserRole }: { initialUsers: User
     const [userAllowedModels, setUserAllowedModels] = useState<string[]>([]);
     const [isLoadingModels, setIsLoadingModels] = useState(false);
     const isSuperAdmin = currentUserRole === 'super_admin';
+
+    // Spend cap state
+    const [selectedUserForCap, setSelectedUserForCap] = useState<string | null>(null);
+    const [capValue, setCapValue] = useState<string>("");
+    const [isSavingCap, setIsSavingCap] = useState(false);
+    const [userCaps, setUserCaps] = useState<Record<string, number | null>>({});
+
+    // Fetch caps on mount
+    useState(() => {
+        fetch("/api/admin/spend-cap")
+            .then(res => res.json())
+            .then(data => {
+                const caps: Record<string, number | null> = {};
+                (data.users || []).forEach((u: any) => {
+                    caps[u.id] = u.daily_spend_cap;
+                });
+                setUserCaps(caps);
+            })
+            .catch(() => {});
+    });
+
+    const handleSetCap = (userId: string) => {
+        setSelectedUserForCap(userId);
+        const currentCap = userCaps[userId];
+        setCapValue(currentCap !== null && currentCap !== undefined ? String(currentCap) : "");
+    };
+
+    const handleSaveCap = async () => {
+        if (!selectedUserForCap) return;
+        setIsSavingCap(true);
+        try {
+            const res = await fetch("/api/admin/spend-cap", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    user_id: selectedUserForCap,
+                    daily_spend_cap: capValue === "" ? null : Number(capValue),
+                }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setUserCaps(prev => ({ ...prev, [selectedUserForCap!]: data.daily_spend_cap }));
+                alert("Daily spend cap updated successfully!");
+                setSelectedUserForCap(null);
+            } else {
+                alert("Failed to update cap: " + (data.error || "Unknown error"));
+            }
+        } catch (error) {
+            console.error("Failed to save cap:", error);
+            alert("Failed to save changes.");
+        } finally {
+            setIsSavingCap(false);
+        }
+    };
 
     // Fetch models and user access when opening modal
     const handleManageModels = async (userId: string) => {
@@ -129,6 +183,16 @@ export function UserList({ initialUsers, currentUserRole }: { initialUsers: User
                             <Button
                                 variant="outline"
                                 size="sm"
+                                onClick={() => handleSetCap(user.id)}
+                            >
+                                <DollarSign className="h-4 w-4 mr-1" />
+                                {userCaps[user.id] !== null && userCaps[user.id] !== undefined
+                                    ? `$${Number(userCaps[user.id]).toFixed(2)}/day`
+                                    : "Set Cap"}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
                                 className="mr-2"
                                 onClick={() => handleManageModels(user.id)}
                             >
@@ -193,6 +257,52 @@ export function UserList({ initialUsers, currentUserRole }: { initialUsers: User
                     </div>
                 ))}
             </div>
+
+            {/* Spend Cap Modal */}
+            <Dialog open={selectedUserForCap !== null} onOpenChange={(open) => !open && setSelectedUserForCap(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>
+                            Daily Spend Cap for {users.find(u => u.id === selectedUserForCap)?.full_name}
+                        </DialogTitle>
+                    </DialogHeader>
+                    <div className="py-4 space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                            Set a daily spending limit in USD. The cap resets every day at 4:00 AM IST.
+                            Leave empty for unlimited spending.
+                        </p>
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg font-medium">$</span>
+                            <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                placeholder="e.g. 5.00 (empty = no limit)"
+                                value={capValue}
+                                onChange={(e) => setCapValue(e.target.value)}
+                                className="flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                            />
+                            <span className="text-sm text-muted-foreground">/ day</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => { setCapValue(""); }}
+                                className="text-xs"
+                            >
+                                Remove Cap
+                            </Button>
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setSelectedUserForCap(null)}>Cancel</Button>
+                                <Button onClick={handleSaveCap} disabled={isSavingCap}>
+                                    {isSavingCap ? "Saving..." : "Save Cap"}
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* Model Management Modal */}
             <Dialog open={selectedUserForModels !== null} onOpenChange={(open) => !open && setSelectedUserForModels(null)}>

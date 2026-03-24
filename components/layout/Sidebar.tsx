@@ -73,6 +73,7 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
     const [userRole, setUserRole] = useState<string | null>(null);
     const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const [creditInfo, setCreditInfo] = useState<{ today_spend: number; daily_spend_cap: number | null } | null>(null);
 
     // Handle click outside dropdown to close it
     useEffect(() => {
@@ -108,6 +109,18 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                     email: user.email || "",
                 });
                 setUserRole(profile?.role || null);
+
+                // Fetch credit info
+                try {
+                    const capRes = await fetch("/api/usage/check-cap");
+                    if (capRes.ok) {
+                        const capData = await capRes.json();
+                        setCreditInfo({
+                            today_spend: capData.today_spend ?? 0,
+                            daily_spend_cap: capData.daily_spend_cap ?? null,
+                        });
+                    }
+                } catch {}
 
                 const { data: chats } = await supabase
                     .from("chats")
@@ -489,10 +502,23 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                 {userInitial}
                             </div>
 
-                            {/* Name + Plan */}
+                            {/* Name + Credits */}
                             <div className={cn("flex-1 min-w-0", isCollapsed && "md:hidden")}>
                                 <p className="text-sm font-medium text-foreground truncate leading-tight">{userDisplayName}</p>
-                                <p className="text-[11px] text-muted-foreground/50 leading-tight">Free plan</p>
+                                {creditInfo && creditInfo.daily_spend_cap !== null ? (
+                                    <p className={cn(
+                                        "text-[11px] leading-tight font-medium tabular-nums",
+                                        creditInfo.today_spend >= creditInfo.daily_spend_cap
+                                            ? "text-red-500"
+                                            : creditInfo.today_spend >= creditInfo.daily_spend_cap * 0.8
+                                                ? "text-amber-500"
+                                                : "text-emerald-500/70"
+                                    )}>
+                                        ${creditInfo.today_spend.toFixed(2)} / ${creditInfo.daily_spend_cap.toFixed(2)}
+                                    </p>
+                                ) : (
+                                    <p className="text-[11px] text-muted-foreground/50 leading-tight">Credits loading...</p>
+                                )}
                             </div>
 
                             {/* Actions */}
