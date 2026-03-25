@@ -200,29 +200,12 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Also check daily_spend tracking table for more accurate today values
     const todayIST = getISTSpendDate();
-    const { data: dailySpendRows } = await supabase
-      .from("user_daily_spend")
-      .select("user_id, total_cost")
-      .eq("spend_date", todayIST)
-      .in("user_id", userIds);
 
-    const trackedSpendMap: Record<string, number> = {};
-    for (const row of (dailySpendRows || []) as any[]) {
-      trackedSpendMap[row.user_id] = Number(row.total_cost) || 0;
-    }
-
-    // Build final response
+    // Build final response — today_cost comes directly from external API data
     const users = Object.values(userUsageMap)
       .map((u) => {
         const daysInWeek = Math.max(1, u.week_active_days.size);
-        // Use tracked spend if available (more accurate), else fall back to usage-based calculation
-        const trackedToday = trackedSpendMap[u.user_id];
-        const todayCost =
-          trackedToday && trackedToday > 0 ? trackedToday : u.today_cost;
-
-        // Effective cap: per-user override > global default
         const effectiveCap = u.daily_spend_cap ?? globalDailyCredit;
 
         return {
@@ -232,10 +215,10 @@ export async function GET(request: NextRequest) {
           role: u.role,
           daily_spend_cap: u.daily_spend_cap,
           effective_daily_credit: effectiveCap,
-          today_cost: todayCost,
+          today_cost: u.today_cost,
           week_avg_daily_cost: u.week_cost / daysInWeek,
           total_cost: u.total_cost,
-          remaining_credit: Math.max(0, effectiveCap - todayCost),
+          remaining_credit: Math.max(0, effectiveCap - u.today_cost),
           chats: u.chats,
         };
       })

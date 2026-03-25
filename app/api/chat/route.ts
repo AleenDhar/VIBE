@@ -2,7 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateEmbeddings } from "@/lib/rag-utils";
-import { getISTSpendDate } from "@/lib/spend-utils";
+import { computeTodaySpend } from "@/lib/spend-check";
 
 export const dynamic = 'force-dynamic';
 
@@ -42,15 +42,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (effectiveCap !== null && effectiveCap !== undefined && Number(effectiveCap) > 0) {
-            const spendDate = getISTSpendDate();
-            const { data: spendRow } = await supabase
-                .from("user_daily_spend")
-                .select("total_cost")
-                .eq("user_id", user.id)
-                .eq("spend_date", spendDate)
-                .single();
-
-            const todaySpend = Number(spendRow?.total_cost) || 0;
+            const todaySpend = await computeTodaySpend(user.id, supabase);
             if (todaySpend >= Number(effectiveCap)) {
                 return NextResponse.json(
                     { error: `Daily spending limit of $${Number(effectiveCap).toFixed(2)} reached. Your limit resets at 4:00 AM IST. Please contact an admin to increase your limit.` },

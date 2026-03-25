@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getISTSpendDate } from "@/lib/spend-utils";
+import { computeTodaySpend } from "@/lib/spend-check";
 
 /**
  * GET /api/usage/check-cap
  * Returns whether the current user is within their daily spend cap.
- * Uses per-user cap if set, otherwise falls back to global default_daily_credit.
+ * Calculates today's spend live from external backend (no stored state).
  */
 export async function GET() {
   const supabase = await createClient();
@@ -45,15 +45,7 @@ export async function GET() {
     }
 
     const capNum = Number(effectiveCap);
-    const spendDate = getISTSpendDate();
-    const { data: spendRow } = await supabase
-      .from("user_daily_spend")
-      .select("total_cost")
-      .eq("user_id", user.id)
-      .eq("spend_date", spendDate)
-      .single();
-
-    const todaySpend = Number(spendRow?.total_cost) || 0;
+    const todaySpend = await computeTodaySpend(user.id, supabase);
     const remaining = Math.max(0, capNum - todaySpend);
     const allowed = todaySpend < capNum;
 
