@@ -23,6 +23,7 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
     const [uploading, setUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState("");
     const [indexingId, setIndexingId] = useState<string | null>(null);
+    const [reindexingAll, setReindexingAll] = useState(false);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -96,6 +97,33 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
         }
     };
 
+    const handleReindexAll = async () => {
+        setReindexingAll(true);
+        try {
+            const { reindexProjectDocuments } = await import("@/lib/actions/documents");
+            const result = await reindexProjectDocuments(projectId);
+
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            const parts: string[] = [];
+            if (result.processed) parts.push(`${result.processed} indexed`);
+            if (result.skipped) parts.push(`${result.skipped} skipped`);
+            if (result.failed) parts.push(`${result.failed} failed`);
+            alert(`Re-index complete: ${parts.join(", ") || "nothing to do"}`);
+
+            if (result.processed || result.failed) {
+                window.location.reload();
+            }
+        } catch (error: any) {
+            console.error("Re-index all failed:", error);
+            alert("Re-index failed: " + error.message);
+        } finally {
+            setReindexingAll(false);
+        }
+    };
+
     const handleReindex = async (doc: any) => {
         setIndexingId(doc.id);
         const supabase = createClient();
@@ -140,22 +168,39 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
             <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-base text-foreground">Files</h3>
                 {canEdit && (
-                    <label className="cursor-pointer">
-                        <input
-                            type="file"
-                            className="hidden"
-                            onChange={handleUpload}
-                            disabled={uploading}
-                            accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.md"
-                        />
-                        <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
-                            {uploading ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                                <Plus className="h-4 w-4" />
-                            )}
-                        </div>
-                    </label>
+                    <div className="flex items-center gap-1">
+                        {files && files.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={handleReindexAll}
+                                disabled={reindexingAll}
+                                title="Re-index unindexed files (skips already indexed)"
+                                className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                            >
+                                {reindexingAll ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                    <RefreshCw className="h-4 w-4" />
+                                )}
+                            </button>
+                        )}
+                        <label className="cursor-pointer">
+                            <input
+                                type="file"
+                                className="hidden"
+                                onChange={handleUpload}
+                                disabled={uploading}
+                                accept=".pdf,.csv,.xls,.xlsx,.xlsm,.txt,.doc,.docx,.md"
+                            />
+                            <div className="flex items-center justify-center h-7 w-7 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors">
+                                {uploading ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                    <Plus className="h-4 w-4" />
+                                )}
+                            </div>
+                        </label>
+                    </div>
                 )}
             </div>
 

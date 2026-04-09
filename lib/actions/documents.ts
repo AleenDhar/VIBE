@@ -199,6 +199,88 @@ export async function updateDocumentContent(documentId: string, content: string)
     return { success: true };
 }
 
+export async function reindexProjectDocuments(projectId: string) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+        return { error: "Unauthorized" };
+    }
+
+    const { data: documents, error: docsError } = await supabase
+        .from("documents")
+        .select("id, name, file_path, content")
+        .eq("project_id", projectId);
+
+    if (docsError) {
+        return { error: docsError.message };
+    }
+
+    let processed = 0;
+    let skipped = 0;
+    let failed = 0;
+    const failures: { name: string; reason: string }[] = [];
+
+    for (const doc of documents || []) {
+        // Skip if chunks already exist
+        const { count } = await supabase
+            .from("document_chunks")
+            .select("*", { count: "exact", head: true })
+            .eq("document_id", doc.id);
+
+        if (count && count > 0) {
+            skipped++;
+            continue;
+        }
+
+        try {
+            // Extract content if missing
+            let content = doc.content;
+            if (!content && doc.file_path) {
+                content = await extractTextFromFile(doc.file_path);
+                await supabase
+                    .from("documents")
+                    .update({ content })
+                    .eq("id", doc.id);
+            }
+
+            if (!content) {
+                failed++;
+                failures.push({ name: doc.name, reason: "No content to index" });
+                continue;
+            }
+
+            const chunks = chunkText(content);
+            if (chunks.length === 0) {
+                skipped++;
+                continue;
+            }
+
+            const embeddings = await generateEmbeddings(chunks);
+            const chunkRows = chunks.map((chunk, i) => ({
+                document_id: doc.id,
+                project_id: projectId,
+                content: chunk,
+                embedding: embeddings[i]
+            }));
+
+            const { error: insertError } = await supabase
+                .from("document_chunks")
+                .insert(chunkRows);
+
+            if (insertError) throw insertError;
+            processed++;
+        } catch (e: any) {
+            console.error(`Re-index failed for ${doc.name}:`, e);
+            failed++;
+            failures.push({ name: doc.name, reason: e.message });
+        }
+    }
+
+    revalidatePath(`/projects/${projectId}`);
+    return { success: true, processed, skipped, failed, failures };
+}
+
 export async function deleteDocument(documentId: string) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
