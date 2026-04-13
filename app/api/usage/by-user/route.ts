@@ -35,7 +35,8 @@ export async function GET(request: NextRequest) {
   }
 
   // Use admin client for DB queries (bypasses RLS) since we verified admin role above
-  const adminDb = createAdminClient();
+  // Falls back to session client if service role key is not configured
+  const adminDb = createAdminClient() || supabase;
 
   const agentApiUrl =
     process.env.AGENT_API_URL ||
