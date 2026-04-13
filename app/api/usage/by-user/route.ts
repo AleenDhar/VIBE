@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getISTSpendDate, getISTDayStart, getISTWeekStart } from "@/lib/spend-utils";
 
 export const dynamic = "force-dynamic";
@@ -33,13 +34,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // Use admin client for DB queries (bypasses RLS) since we verified admin role above
+  const adminDb = createAdminClient();
+
   const agentApiUrl =
     process.env.AGENT_API_URL ||
     "https://agent-salesforce-link.replit.app";
 
   try {
     // Fetch global daily credit setting
-    const { data: creditSetting } = await supabase
+    const { data: creditSetting } = await adminDb
       .from("app_config")
       .select("value")
       .eq("key", "default_daily_credit")
@@ -74,8 +78,8 @@ export async function GET(request: NextRequest) {
     // Get all chat_ids from usage
     const chatIds = [...new Set(usageRows.map((r) => r.chat_id))];
 
-    // Fetch chat info from local DB
-    const { data: chats } = await supabase
+    // Fetch chat info from local DB (admin client bypasses RLS)
+    const { data: chats } = await adminDb
       .from("chats")
       .select("id, title, user_id, project_id, projects:project_id(name)")
       .in("id", chatIds);
@@ -101,7 +105,7 @@ export async function GET(request: NextRequest) {
       ),
     ];
 
-    const { data: profiles } = await supabase
+    const { data: profiles } = await adminDb
       .from("profiles")
       .select("id, full_name, username, role, daily_spend_cap")
       .in("id", userIds);
