@@ -74,11 +74,18 @@ export async function GET(request: NextRequest) {
     // Get all chat_ids from usage
     const chatIds = [...new Set(usageRows.map((r) => r.chat_id))];
 
-    // Fetch chat info from local DB
-    const { data: chats } = await supabase
-      .from("chats")
-      .select("id, title, user_id, project_id, projects:project_id(name)")
-      .in("id", chatIds);
+    // Fetch chat info from local DB in batches (PostgREST has URL length limits)
+    const BATCH_SIZE = 100;
+    const allChats: any[] = [];
+    for (let i = 0; i < chatIds.length; i += BATCH_SIZE) {
+      const batch = chatIds.slice(i, i + BATCH_SIZE);
+      const { data: batchChats } = await supabase
+        .from("chats")
+        .select("id, title, user_id, project_id, projects:project_id(name)")
+        .in("id", batch);
+      if (batchChats) allChats.push(...batchChats);
+    }
+    const chats = allChats;
 
     const chatMap: Record<
       string,
