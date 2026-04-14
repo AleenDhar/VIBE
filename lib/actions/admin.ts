@@ -191,14 +191,19 @@ export interface UserAggregate {
     project_count: number;
 }
 
-export async function getOmnivisionUserAggregates() {
+export async function getOmnivisionUserAggregates(fromDate?: string, toDate?: string) {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
 
     const supabase = await createClient();
 
+    const rpcParams: Record<string, string | null> = {
+        from_date: fromDate || null,
+        to_date: toDate || null,
+    };
+
     const { data, error } = await supabase
-        .rpc("get_omnivision_user_aggregates")
+        .rpc("get_omnivision_user_aggregates", rpcParams)
         .order("chat_count", { ascending: false })
         .limit(2000);
 
@@ -212,19 +217,24 @@ export async function getOmnivisionUserAggregates() {
 }
 
 // 5b. Get chats for a specific user on-demand
-export async function getOmnivisionChatsForUser(targetUserId: string) {
+export async function getOmnivisionChatsForUser(targetUserId: string, fromDate?: string, toDate?: string) {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
 
     const supabase = await createClient();
 
     // Fetch all chats for this user (up to 1000 for safety)
-    const { data: chats, error: chatsError } = await supabase
+    let query = supabase
         .from("chats")
         .select("id, title, created_at, updated_at, project_id, user_id")
         .eq("user_id", targetUserId)
         .order("created_at", { ascending: false })
         .limit(1000);
+
+    if (fromDate) query = query.gte("created_at", fromDate);
+    if (toDate) query = query.lte("created_at", toDate);
+
+    const { data: chats, error: chatsError } = await query;
 
     if (chatsError) {
         console.error("Error fetching chats for user:", chatsError);

@@ -3,9 +3,10 @@
 import { useState, useRef, useCallback } from "react";
 import {
     Eye, Search, MessageSquare, User, ChevronDown, ChevronRight,
-    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2, X, FileSearch
+    ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2, X, FileSearch,
+    CalendarDays
 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, subDays, startOfDay, endOfDay, format } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult } from "@/lib/actions/admin";
@@ -38,6 +39,8 @@ interface UserState extends UserAggregate {
     projects?: ProjectGroup[];
 }
 
+type DatePreset = "all" | "today" | "7d" | "30d" | "custom";
+
 export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: UserAggregate[] }) {
     const [searchQuery, setSearchQuery] = useState("");
     const [filterRole, setFilterRole] = useState("all");
@@ -51,6 +54,95 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
         }
         return init;
     });
+
+    // ── Date filter state ──────────────────────────────────────────────
+    const [datePreset, setDatePreset] = useState<DatePreset>("all");
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [dateLoading, setDateLoading] = useState(false);
+
+    const getDateRange = useCallback((): { from?: string; to?: string } => {
+        const now = new Date();
+        switch (datePreset) {
+            case "today":
+                return { from: startOfDay(now).toISOString(), to: endOfDay(now).toISOString() };
+            case "7d":
+                return { from: startOfDay(subDays(now, 7)).toISOString(), to: endOfDay(now).toISOString() };
+            case "30d":
+                return { from: startOfDay(subDays(now, 30)).toISOString(), to: endOfDay(now).toISOString() };
+            case "custom":
+                return {
+                    from: dateFrom ? startOfDay(new Date(dateFrom)).toISOString() : undefined,
+                    to: dateTo ? endOfDay(new Date(dateTo)).toISOString() : undefined,
+                };
+            default:
+                return {};
+        }
+    }, [datePreset, dateFrom, dateTo]);
+
+    const applyDateFilter = useCallback(async (preset: DatePreset, customFrom?: string, customTo?: string) => {
+        setDatePreset(preset);
+        if (customFrom !== undefined) setDateFrom(customFrom);
+        if (customTo !== undefined) setDateTo(customTo);
+        setDateLoading(true);
+
+        // Collapse all expanded users since data will change
+        setExpandedUsers(new Set());
+        setExpandedProjects(new Set());
+
+        try {
+            const now = new Date();
+            let from: string | undefined;
+            let to: string | undefined;
+
+            switch (preset) {
+                case "today":
+                    from = startOfDay(now).toISOString();
+                    to = endOfDay(now).toISOString();
+                    break;
+                case "7d":
+                    from = startOfDay(subDays(now, 7)).toISOString();
+                    to = endOfDay(now).toISOString();
+                    break;
+                case "30d":
+                    from = startOfDay(subDays(now, 30)).toISOString();
+                    to = endOfDay(now).toISOString();
+                    break;
+                case "custom":
+                    from = (customFrom || dateFrom) ? startOfDay(new Date(customFrom || dateFrom)).toISOString() : undefined;
+                    to = (customTo || dateTo) ? endOfDay(new Date(customTo || dateTo)).toISOString() : undefined;
+                    break;
+            }
+
+            const { getOmnivisionUserAggregates } = await import("@/lib/actions/admin");
+            const newAggregates = await getOmnivisionUserAggregates(from, to);
+
+            const updated: Record<string, UserState> = {};
+            for (const u of newAggregates) {
+                updated[u.user_id] = { ...u, projects: [] };
+            }
+            setUsers(updated);
+        } catch (err) {
+            console.error("Failed to apply date filter:", err);
+        } finally {
+            setDateLoading(false);
+        }
+    }, [dateFrom, dateTo]);
+
+    const dateLabel = useCallback(() => {
+        switch (datePreset) {
+            case "today": return "Today";
+            case "7d": return "Last 7 days";
+            case "30d": return "Last 30 days";
+            case "custom":
+                if (dateFrom && dateTo) return `${dateFrom} → ${dateTo}`;
+                if (dateFrom) return `From ${dateFrom}`;
+                if (dateTo) return `Until ${dateTo}`;
+                return "Custom";
+            default: return "All time";
+        }
+    }, [datePreset, dateFrom, dateTo]);
 
     // ── Message search state ────────────────────────────────────────────
     const [msgSearchQuery, setMsgSearchQuery] = useState("");
@@ -133,8 +225,9 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
         return false;
     });
 
-    const totalUsers = initialAggregates.length;
-    const totalChats = initialAggregates.reduce((acc, curr) => acc + Number(curr.chat_count), 0);
+    const allUsersList = Object.values(users);
+    const totalUsers = allUsersList.filter(u => Number(u.chat_count) > 0 || datePreset === "all").length;
+    const totalChats = allUsersList.reduce((acc, curr) => acc + Number(curr.chat_count), 0);
 
     // ── Toggle helpers ───────────────────────────────────────────────────
     const toggleUser = async (uid: string) => {
@@ -153,7 +246,8 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
             setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], isLoading: true } }));
 
             try {
-                const fetchedChats = await getOmnivisionChatsForUser(uid);
+                const range = getDateRange();
+                const fetchedChats = await getOmnivisionChatsForUser(uid, range.from, range.to);
 
                 const pGroups: Record<string, ProjectGroup> = {};
                 for (const chat of fetchedChats) {
@@ -282,6 +376,22 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                                 className="w-full bg-muted/30 border border-border/20 rounded-xl py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 placeholder:text-muted-foreground/30"
                             />
                         </div>
+
+                        {/* Date filter button */}
+                        <button
+                            onClick={() => setShowDatePicker(prev => !prev)}
+                            className={cn(
+                                "flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium transition-colors whitespace-nowrap",
+                                datePreset !== "all"
+                                    ? "bg-amber-500/15 border-amber-500/30 text-amber-500"
+                                    : "bg-muted/30 border-border/20 text-muted-foreground hover:text-foreground hover:border-border/40"
+                            )}
+                            title="Filter by date"
+                        >
+                            {dateLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}
+                            <span className="hidden sm:inline">{dateLabel()}</span>
+                        </button>
+
                         <button
                             onClick={() => setShowMsgSearch(prev => !prev)}
                             className={cn(
@@ -309,6 +419,94 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                             </select>
                         </div>
                     </div>
+
+                    {/* ── Date filter panel ───────────────────────────── */}
+                    {showDatePicker && (
+                        <div className="bg-muted/20 border border-border/20 rounded-xl p-3 space-y-3">
+                            {/* Preset buttons */}
+                            <div className="flex flex-wrap gap-2">
+                                {([
+                                    { key: "all", label: "All time" },
+                                    { key: "today", label: "Today" },
+                                    { key: "7d", label: "Last 7 days" },
+                                    { key: "30d", label: "Last 30 days" },
+                                    { key: "custom", label: "Custom range" },
+                                ] as { key: DatePreset; label: string }[]).map(({ key, label }) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => {
+                                            if (key !== "custom") {
+                                                applyDateFilter(key);
+                                                if (key === "all") setShowDatePicker(false);
+                                            } else {
+                                                setDatePreset("custom");
+                                            }
+                                        }}
+                                        className={cn(
+                                            "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                                            datePreset === key
+                                                ? "bg-amber-500/15 border-amber-500/30 text-amber-500"
+                                                : "bg-background/60 border-border/20 text-muted-foreground hover:text-foreground hover:border-border/40"
+                                        )}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Custom date inputs */}
+                            {datePreset === "custom" && (
+                                <div className="flex items-center gap-2">
+                                    <div className="flex-1">
+                                        <label className="text-[10px] text-muted-foreground/50 uppercase tracking-wider mb-1 block">From</label>
+                                        <input
+                                            type="date"
+                                            value={dateFrom}
+                                            onChange={e => setDateFrom(e.target.value)}
+                                            className="w-full bg-background/60 border border-border/20 rounded-lg py-1.5 px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 text-foreground"
+                                        />
+                                    </div>
+                                    <span className="text-muted-foreground/30 mt-4">→</span>
+                                    <div className="flex-1">
+                                        <label className="text-[10px] text-muted-foreground/50 uppercase tracking-wider mb-1 block">To</label>
+                                        <input
+                                            type="date"
+                                            value={dateTo}
+                                            onChange={e => setDateTo(e.target.value)}
+                                            className="w-full bg-background/60 border border-border/20 rounded-lg py-1.5 px-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 text-foreground"
+                                        />
+                                    </div>
+                                    <button
+                                        onClick={() => applyDateFilter("custom", dateFrom, dateTo)}
+                                        disabled={!dateFrom && !dateTo}
+                                        className={cn(
+                                            "mt-4 px-4 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                                            dateFrom || dateTo
+                                                ? "bg-amber-500/15 border-amber-500/30 text-amber-500 hover:bg-amber-500/25"
+                                                : "bg-muted/30 border-border/20 text-muted-foreground/40 cursor-not-allowed"
+                                        )}
+                                    >
+                                        Apply
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Active filter indicator with clear */}
+                            {datePreset !== "all" && datePreset !== "custom" && (
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-muted-foreground/50">
+                                        Showing chats from <span className="text-amber-500 font-medium">{dateLabel()}</span>
+                                    </span>
+                                    <button
+                                        onClick={() => { applyDateFilter("all"); setShowDatePicker(false); }}
+                                        className="text-muted-foreground/40 hover:text-foreground flex items-center gap-1"
+                                    >
+                                        <X className="h-3 w-3" /> Clear
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {/* ── Message content search panel ─────────────────── */}
                     {showMsgSearch && (
