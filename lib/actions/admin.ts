@@ -197,13 +197,12 @@ export async function getOmnivisionUserAggregates(fromDate?: string, toDate?: st
 
     const supabase = await createClient();
 
-    const rpcParams: Record<string, string | null> = {
-        from_date: fromDate || null,
-        to_date: toDate || null,
-    };
+    const rpcParams: Record<string, string> = {};
+    if (fromDate) rpcParams.from_date = fromDate;
+    if (toDate) rpcParams.to_date = toDate;
 
     const { data, error } = await supabase
-        .rpc("get_omnivision_user_aggregates", rpcParams)
+        .rpc("get_omnivision_user_aggregates", Object.keys(rpcParams).length > 0 ? rpcParams : undefined)
         .order("chat_count", { ascending: false })
         .limit(2000);
 
