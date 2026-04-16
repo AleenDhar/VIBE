@@ -68,8 +68,54 @@ export async function updateSystemPrompt(projectId: string, systemPrompt: string
         return { error: error.message };
     }
 
+    // Log version history
+    await supabase.from("system_prompt_versions").insert({
+        project_id: projectId,
+        content: systemPrompt,
+        edited_by: user.id,
+    });
+
     revalidatePath(`/projects/${projectId}`);
     return { success: true };
+}
+
+export interface SystemPromptVersion {
+    id: string;
+    content: string;
+    edited_by_name: string;
+    created_at: string;
+}
+
+export async function getSystemPromptVersions(projectId: string): Promise<SystemPromptVersion[]> {
+    const supabase = await createClient();
+
+    const { data, error } = await supabase
+        .from("system_prompt_versions")
+        .select("id, content, created_at, edited_by")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+    if (error || !data) return [];
+
+    // Fetch editor names
+    const editorIds = [...new Set(data.map(v => v.edited_by))];
+    const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("id", editorIds);
+
+    const nameMap: Record<string, string> = {};
+    for (const p of profiles || []) {
+        nameMap[p.id] = p.full_name || "Unknown";
+    }
+
+    return data.map(v => ({
+        id: v.id,
+        content: v.content,
+        edited_by_name: nameMap[v.edited_by] || "Unknown",
+        created_at: v.created_at,
+    }));
 }
 
 export async function updateProjectVisibility(projectId: string, visibility: 'private' | 'public') {

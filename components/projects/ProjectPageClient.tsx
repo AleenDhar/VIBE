@@ -38,6 +38,7 @@ interface ProjectPageClientProps {
     initialChats: Chat[];
     initialDocuments: any[];
     initialMemories: any[];
+    initialVersions: any[];
 }
 
 export function ProjectPageClient({
@@ -48,6 +49,7 @@ export function ProjectPageClient({
     initialChats,
     initialDocuments,
     initialMemories,
+    initialVersions,
 }: ProjectPageClientProps) {
     const router = useRouter();
     const supabase = createClient();
@@ -550,7 +552,7 @@ export function ProjectPageClient({
 
                     {/* Instructions Section */}
                     <div className="p-1">
-                        <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} canEdit={canEdit} />
+                        <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} canEdit={canEdit} initialVersions={initialVersions} />
                     </div>
 
                     {/* Files Section */}

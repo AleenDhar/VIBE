@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
 import { getProjectMemories } from "@/lib/actions/memories";
+import { getSystemPromptVersions } from "@/lib/actions/projects";
 import { ProjectPageClient } from "@/components/projects/ProjectPageClient";
 
 export const dynamic = "force-dynamic";
@@ -102,6 +103,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
     const allMemories = [...mappedInstructions, ...projectMemories];
 
+    // Fetch system prompt version history
+    const promptVersions = await getSystemPromptVersions(id);
+
     return (
         <ProjectPageClient
             project={project}
@@ -111,6 +115,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             initialChats={filteredChats}
             initialDocuments={documents || []}
             initialMemories={allMemories}
+            initialVersions={promptVersions}
         />
     );
 }
