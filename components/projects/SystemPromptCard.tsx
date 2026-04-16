@@ -100,6 +100,17 @@ export function SystemPromptCard({ projectId, initialPrompt, canEdit, initialVer
                 </p>
             )}
 
+            {/* Last edited info */}
+            {versions.length > 0 && !isEditing && (
+                <p className="text-[11px] text-muted-foreground/40 flex items-center gap-1 mt-1">
+                    <User className="h-3 w-3" />
+                    Last edited by <span className="text-muted-foreground/60">{versions[0].edited_by_name}</span>
+                    <span className="mx-0.5">·</span>
+                    <Clock className="h-2.5 w-2.5" />
+                    {formatDistanceToNow(new Date(versions[0].created_at))} ago
+                </p>
+            )}
+
             {/* Version History */}
             {showHistory && versions.length > 0 && (
                 <div className="border border-border/30 rounded-lg overflow-hidden mt-3">
