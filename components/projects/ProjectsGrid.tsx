@@ -48,7 +48,7 @@ export function ProjectsGrid({
                 <Card className="h-full transition-all hover:border-primary hover:shadow-md cursor-pointer">
                     <CardHeader>
                         <div className="flex justify-between items-start">
-                            <CardTitle className="line-clamp-1">{project.name}</CardTitle>
+                            <CardTitle className="break-words">{project.name}</CardTitle>
                             <div className="flex items-center gap-1.5 flex-shrink-0">
                                 {project.visibility === 'public' && (
                                     <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded-full whitespace-nowrap">
