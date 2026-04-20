@@ -10,6 +10,8 @@ import { ProjectFiles } from "@/components/projects/ProjectFiles";
 import { MemoryManager } from "@/components/projects/MemoryManager";
 import { VisibilityToggle } from "@/components/projects/VisibilityToggle";
 import { ProjectAccessManager } from "@/components/projects/ProjectAccessManager";
+import { TagManager } from "@/components/projects/TagManager";
+import type { Tag } from "@/lib/actions/tags";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { createClient } from "@/lib/supabase/client";
 import { extractFileContent } from "@/lib/extract-file-content";
@@ -39,6 +41,7 @@ interface ProjectPageClientProps {
     initialDocuments: any[];
     initialMemories: any[];
     initialVersions: any[];
+    initialTags: Tag[];
 }
 
 export function ProjectPageClient({
@@ -50,6 +53,7 @@ export function ProjectPageClient({
     initialDocuments,
     initialMemories,
     initialVersions,
+    initialTags,
 }: ProjectPageClientProps) {
     const router = useRouter();
     const supabase = createClient();
@@ -359,6 +363,11 @@ export function ProjectPageClient({
                                     canEdit={canManageAccess}
                                 />
                             </div>
+                            <TagManager
+                                projectId={project.id}
+                                canEdit={canEdit}
+                                initialTags={initialTags}
+                            />
                         </div>
 
                         {/* Chat Input */}
