@@ -66,8 +66,8 @@ export function ProjectsGrid({
             }
             if (selectedTagIds.length > 0) {
                 const projTagIds = new Set((tagsByProject[p.id] || []).map(t => t.id));
-                // Require all selected tags to be present (AND).
-                if (!selectedTagIds.every(id => projTagIds.has(id))) return false;
+                // Match if any selected tag is present (OR).
+                if (!selectedTagIds.some(id => projTagIds.has(id))) return false;
             }
             return true;
         });
