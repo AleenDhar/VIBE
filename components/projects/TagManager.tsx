@@ -23,12 +23,17 @@ export function TagManager({ projectId, canEdit, initialTags }: TagManagerProps)
     const [adding, setAdding] = useState(false);
     const [input, setInput] = useState("");
     const [allTags, setAllTags] = useState<TagWithUsage[]>([]);
-    const [showSuggestions, setShowSuggestions] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [removingId, setRemovingId] = useState<string | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
+    useEffect(() => {
+        if (!canEdit) return;
+        getAllTagsWithUsage().then(setAllTags).catch(() => { });
+    }, [canEdit]);
+
+    // Refetch when opening the picker so new tags added elsewhere show up.
     useEffect(() => {
         if (!adding) return;
         getAllTagsWithUsage().then(setAllTags).catch(() => { });
@@ -48,7 +53,6 @@ export function TagManager({ projectId, canEdit, initialTags }: TagManagerProps)
     const closeAdd = () => {
         setAdding(false);
         setInput("");
-        setShowSuggestions(false);
     };
 
     const normalizedInput = input.trim().toLowerCase();
@@ -76,7 +80,6 @@ export function TagManager({ projectId, canEdit, initialTags }: TagManagerProps)
             }
             setTags(prev => [...prev, result.tag!].sort((a, b) => a.name.localeCompare(b.name)));
             setInput("");
-            setShowSuggestions(false);
             router.refresh();
             inputRef.current?.focus();
         } finally {
@@ -155,43 +158,49 @@ export function TagManager({ projectId, canEdit, initialTags }: TagManagerProps)
                         ref={inputRef}
                         type="text"
                         value={input}
-                        onChange={e => {
-                            setInput(e.target.value);
-                            setShowSuggestions(true);
-                        }}
-                        onFocus={() => setShowSuggestions(true)}
+                        onChange={e => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="Type and press Enter…"
+                        placeholder="Pick existing or type new…"
                         disabled={submitting}
-                        className="text-xs px-2 py-0.5 rounded-full border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[160px]"
+                        className="text-xs px-2 py-0.5 rounded-full border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 min-w-[180px]"
                     />
-                    {showSuggestions && (suggestions.length > 0 || (normalizedInput && !exactMatch && !alreadyOnProject)) && (
-                        <div className="absolute top-full left-0 mt-1 w-60 max-h-60 overflow-auto rounded-lg border border-border bg-popover shadow-lg z-20">
-                            {suggestions.map(s => (
-                                <button
-                                    key={s.id}
-                                    type="button"
-                                    onMouseDown={e => e.preventDefault()}
-                                    onClick={() => submit(s.name)}
-                                    className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-muted"
-                                >
-                                    <span>{s.name}</span>
-                                    <span className="text-[10px] text-muted-foreground">{s.usage_count}</span>
-                                </button>
-                            ))}
-                            {normalizedInput && !exactMatch && !alreadyOnProject && (
-                                <button
-                                    type="button"
-                                    onMouseDown={e => e.preventDefault()}
-                                    onClick={() => submit(input)}
-                                    className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-left hover:bg-muted border-t border-border"
-                                >
-                                    <Plus className="h-3 w-3" />
-                                    Create "{normalizedInput}"
-                                </button>
-                            )}
-                        </div>
-                    )}
+                    <div className="absolute top-full left-0 mt-1 w-64 max-h-60 overflow-auto rounded-lg border border-border bg-popover shadow-lg z-20">
+                        {suggestions.length > 0 && (
+                            <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground border-b border-border">
+                                Existing tags
+                            </div>
+                        )}
+                        {suggestions.map(s => (
+                            <button
+                                key={s.id}
+                                type="button"
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => submit(s.name)}
+                                className="w-full flex items-center justify-between px-3 py-1.5 text-xs text-left hover:bg-muted"
+                            >
+                                <span>{s.name}</span>
+                                <span className="text-[10px] text-muted-foreground">{s.usage_count}</span>
+                            </button>
+                        ))}
+                        {suggestions.length === 0 && !normalizedInput && (
+                            <div className="px-3 py-2 text-xs text-muted-foreground">
+                                {allTags.length === 0
+                                    ? "No tags yet — type to create one."
+                                    : "All existing tags are already on this project."}
+                            </div>
+                        )}
+                        {normalizedInput && !exactMatch && !alreadyOnProject && (
+                            <button
+                                type="button"
+                                onMouseDown={e => e.preventDefault()}
+                                onClick={() => submit(input)}
+                                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-left hover:bg-muted border-t border-border"
+                            >
+                                <Plus className="h-3 w-3" />
+                                Create &quot;{normalizedInput}&quot;
+                            </button>
+                        )}
+                    </div>
                 </div>
             )}
         </div>
