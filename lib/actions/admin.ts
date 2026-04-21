@@ -294,6 +294,80 @@ export async function getOmnivisionChatsForUser(targetUserId: string, fromDate?:
     }));
 }
 
+// ── ABM Run Attribution (Path C surfacing) ─────────────────────────────────
+
+/**
+ * Per-user ABM reuse metrics for the Omnivision window.
+ *
+ * Returns rows where the user had at least one ABM run in the window.
+ * Powered by the `get_abm_run_counts_by_user` RPC which filters by
+ * `started_at` in IST (same semantic as the chat aggregate).
+ *
+ * `chats_with_reuse` = chats that had MORE than one ABM run in them.
+ * `max_runs_in_one_chat` = the heaviest single chat's run count.
+ */
+export interface AbmRunCountsByUser {
+    user_id: string;
+    run_count: number;
+    distinct_accounts: number;
+    chats_with_reuse: number;
+    max_runs_in_one_chat: number;
+}
+
+export async function getAbmRunCountsByUser(fromDate?: string, toDate?: string): Promise<AbmRunCountsByUser[]> {
+    const isSuperAdmin = await verifySuperAdmin();
+    if (!isSuperAdmin) return [];
+
+    const supabase = await createClient();
+
+    const rpcParams: Record<string, string> = {};
+    if (fromDate) rpcParams.from_date = fromDate;
+    if (toDate) rpcParams.to_date = toDate;
+
+    const { data, error } = await supabase
+        .rpc("get_abm_run_counts_by_user", Object.keys(rpcParams).length > 0 ? rpcParams : undefined);
+
+    if (error) {
+        console.error("Error fetching ABM run counts:", error);
+        return [];
+    }
+
+    return (data || []) as AbmRunCountsByUser[];
+}
+
+/**
+ * Per-chat drill-down: the ABM runs that happened inside one chat, in
+ * sequence order. Used to show the "1 chat = 7 ABMs" expansion in the UI.
+ *
+ * Each run has account_id, campaign_id, pushed_count, started_at,
+ * completed_at, and a `source` (marker | heuristic | manual).
+ */
+export interface AbmRunForChat {
+    seq: number;
+    account_id: string;
+    campaign_id: string | null;
+    pushed_count: number | null;
+    started_at: string;
+    completed_at: string | null;
+    source: "marker" | "heuristic" | "manual";
+}
+
+export async function getAbmRunsForChat(chatId: string): Promise<AbmRunForChat[]> {
+    const isSuperAdmin = await verifySuperAdmin();
+    if (!isSuperAdmin) return [];
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .rpc("get_abm_runs_for_chat", { p_chat_id: chatId });
+
+    if (error) {
+        console.error("Error fetching ABM runs for chat:", error);
+        return [];
+    }
+
+    return (data || []) as AbmRunForChat[];
+}
+
 // 6. Get chat messages for omnivision
 export async function getChatMessagesForOmnivision(chatId: string) {
     const isSuperAdmin = await verifySuperAdmin();

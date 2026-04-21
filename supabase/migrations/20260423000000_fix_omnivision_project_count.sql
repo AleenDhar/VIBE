@@ -90,15 +90,18 @@ BEGIN
     -- Synthetic orphan bucket: chats with user_id IS NULL that had
     -- activity in the window. Its project_count mirrors the new semantics.
     SELECT
-        '00000000-0000-0000-0000-000000000000'::uuid AS user_id,
-        '(unattributed)'::text                        AS username,
-        'Unattributed chats'::text                    AS full_name,
-        NULL::text                                    AS avatar_url,
-        'unknown'::text                               AS role,
-        COUNT(*)::bigint                              AS chat_count,
-        COUNT(DISTINCT project_id)::bigint            AS project_count
-    FROM active_chats
-    WHERE user_id IS NULL
+        '00000000-0000-0000-0000-000000000000'::uuid,
+        '(unattributed)'::text,
+        'Unattributed chats'::text,
+        NULL::text,
+        'unknown'::text,
+        COUNT(*)::bigint,
+        COUNT(DISTINCT ac.project_id)::bigint
+    FROM active_chats ac
+    -- Qualify `user_id` with the `ac` alias: without it, Postgres sees the
+    -- RETURNS TABLE column `user_id` and the CTE's `user_id` as equally
+    -- valid references and raises `column reference "user_id" is ambiguous`.
+    WHERE ac.user_id IS NULL
     HAVING COUNT(*) > 0;
 END;
 $$;

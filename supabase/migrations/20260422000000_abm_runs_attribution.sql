@@ -281,14 +281,18 @@ BEGIN
 
     RETURN QUERY
     WITH filtered_runs AS (
-        SELECT r.*, c.user_id AS chat_user_id
+        SELECT r.id, r.account_id, c.user_id AS chat_user_id, r.chat_id
         FROM public.abm_runs r
         JOIN public.chats c ON c.id = r.chat_id
         WHERE (from_ts IS NULL OR r.started_at >= from_ts)
           AND (to_ts   IS NULL OR r.started_at <  to_ts)
     ),
+    -- Column named `rc` (not `run_count`) to avoid colliding with the
+    -- RETURNS TABLE output column of the same name. Without this rename
+    -- Postgres raises `column reference "run_count" is ambiguous` when
+    -- resolving `p.run_count` inside the outer SELECT's subqueries.
     per_chat AS (
-        SELECT chat_user_id, chat_id, COUNT(*) AS run_count
+        SELECT chat_user_id, chat_id, COUNT(*) AS rc
         FROM filtered_runs
         GROUP BY chat_user_id, chat_id
     )
@@ -298,9 +302,9 @@ BEGIN
         COUNT(DISTINCT fr.account_id)::bigint              AS distinct_accounts,
         (SELECT COUNT(*) FROM per_chat p
          WHERE p.chat_user_id = fr.chat_user_id
-           AND p.run_count > 1)::bigint                    AS chats_with_reuse,
+           AND p.rc > 1)::bigint                           AS chats_with_reuse,
         COALESCE(
-          (SELECT MAX(run_count) FROM per_chat p
+          (SELECT MAX(p.rc) FROM per_chat p
            WHERE p.chat_user_id = fr.chat_user_id), 0
         )::bigint                                          AS max_runs_in_one_chat
     FROM filtered_runs fr
