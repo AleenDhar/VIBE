@@ -231,6 +231,21 @@ Please use this context to personalize your responses.`;
         if (finalProjectId) {
             // 4b. Get Project Documents via Vector Search (RAG)
             try {
+                // 4. Get Project Memories FIRST — these are the highest-priority context
+                const { data: memories } = await supabase
+                    .from("project_memories")
+                    .select("memory_type, content, sentiment, importance")
+                    .eq("project_id", finalProjectId)
+                    .order("importance", { ascending: false })
+                    .limit(20);
+
+                if (memories && memories.length > 0) {
+                    const memoryContext = memories.map(m =>
+                        `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
+                    ).join("\n");
+                    systemPrompt += `\n\n## HIGHEST-PRIORITY CONTEXT — Project Memory\nThe following are authoritative memories for this project, captured from prior conversations and user input. They represent established facts, preferences, and rules specific to this project.\n\nYou MUST treat these as the top-priority context for every response:\n- Apply them proactively whenever relevant, without being asked.\n- They override general guidance, default behavior, and any conflicting assumptions.\n- Higher Importance scores indicate stronger precedence.\n- If a user request conflicts with a memory, surface the conflict and defer to the memory unless the user explicitly overrides it.\n\n${memoryContext}`;
+                }
+
                 const { data: project } = await supabase
                     .from("projects")
                     .select("system_prompt")
@@ -239,21 +254,6 @@ Please use this context to personalize your responses.`;
 
                 if (project?.system_prompt) {
                     systemPrompt += `\n\n## Project Context\n${project.system_prompt}`;
-                }
-
-                // 4. Get Project Memories
-                const { data: memories } = await supabase
-                    .from("project_memories")
-                    .select("memory_type, content, sentiment, importance")
-                    .eq("project_id", finalProjectId)
-                    .order("importance", { ascending: false })
-                    .limit(10);
-
-                if (memories && memories.length > 0) {
-                    const memoryContext = memories.map(m =>
-                        `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
-                    ).join("\n");
-                    systemPrompt += `\n\n## Project Memory Context\nThe following are important insights and context from previous conversations in this project:\n\n${memoryContext}\n\nUse this context to provide more relevant and personalized responses.`;
                 }
 
                 // Generate an embedding for the user's latest message

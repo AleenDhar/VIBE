@@ -20,7 +20,10 @@
       "Bash(find /c/Users/aleen/OneDrive/Desktop/deal-intellegence -name migrations -o -name schema.sql -o -name *.sql)",
       "Bash(find /c/Users/aleen/OneDrive/Desktop/deal-intellegence -type f \\\\\\(-name *.sql -o -name *migration* -o -name *schema* \\\\\\))",
       "Bash(grep -r \"user_daily_spend\\\\|daily_spend_cap\" /c/Users/aleen/OneDrive/Desktop/deal-intellegence --include=*.ts --include=*.tsx --include=*.sql)",
-      "Bash(grep -r \"vercel.cron\\\\|/api.*cron\\\\|schedule.*run\" /c/Users/aleen/OneDrive/Desktop/deal-intellegence --include=*.json --include=*.ts --include=*.tsx)"
+      "Bash(grep -r \"vercel.cron\\\\|/api.*cron\\\\|schedule.*run\" /c/Users/aleen/OneDrive/Desktop/deal-intellegence --include=*.json --include=*.ts --include=*.tsx)",
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(node scripts/backfill-embeddings.mjs)"
     ]
   }
 }

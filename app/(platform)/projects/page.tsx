@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/Button";
 import Link from "next/link";
 import { FolderPlus } from "lucide-react";
 import { ProjectsGrid } from "@/components/projects/ProjectsGrid";
+import { getAllTagsWithUsage, getTagsForProjects } from "@/lib/actions/tags";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,12 @@ export default async function ProjectsPage() {
     const myProjects = projects.filter((p: any) => p.owner_id === user?.id);
     const sharedProjects = projects.filter((p: any) => p.owner_id !== user?.id);
 
+    const allProjectIds = projects.map((p: any) => p.id);
+    const [tagsByProject, allTags] = await Promise.all([
+        getTagsForProjects(allProjectIds),
+        getAllTagsWithUsage(),
+    ]);
+
     return (
         <div className="flex flex-col gap-10">
             <div className="flex items-center justify-between border-b pb-6">
@@ -54,6 +61,8 @@ export default async function ProjectsPage() {
                 sharedProjects={sharedProjects}
                 userId={user?.id || ""}
                 isAdmin={isAdmin}
+                tagsByProject={tagsByProject}
+                allTags={allTags}
             />
         </div>
     );

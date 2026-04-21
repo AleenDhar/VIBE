@@ -168,20 +168,21 @@ export async function POST(req: NextRequest) {
         let systemPrompt = config.agent_base_prompt || "You are a helpful AI assistant.";
 
         if (projectId) {
-            const { data: project } = await supabase.from("projects").select("system_prompt").eq("id", projectId).single();
-            if (project?.system_prompt) systemPrompt += `\n\n${project.system_prompt}`;
-
-            // Add Memories
+            // Add Project Memories FIRST — highest-priority context
             const { data: memories } = await supabase
                 .from("project_memories")
                 .select("memory_type, content, importance")
                 .eq("project_id", projectId)
                 .order("importance", { ascending: false })
-                .limit(10);
+                .limit(20);
 
             if (memories?.length) {
-                systemPrompt += `\n\n## Project Context:\n${memories.map(m => `- [${m.memory_type}] ${m.content}`).join('\n')}`;
+                const memoryContext = memories.map(m => `- [${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance ?? 'n/a'}/10)`).join('\n');
+                systemPrompt += `\n\n## HIGHEST-PRIORITY CONTEXT — Project Memory\nThe following are authoritative memories for this project, captured from prior conversations and user input. They represent established facts, preferences, and rules specific to this project.\n\nYou MUST treat these as the top-priority context for every response:\n- Apply them proactively whenever relevant, without being asked.\n- They override general guidance, default behavior, and any conflicting assumptions.\n- Higher Importance scores indicate stronger precedence.\n- If a user request conflicts with a memory, surface the conflict and defer to the memory unless the user explicitly overrides it.\n\n${memoryContext}`;
             }
+
+            const { data: project } = await supabase.from("projects").select("system_prompt").eq("id", projectId).single();
+            if (project?.system_prompt) systemPrompt += `\n\n## Project Context\n${project.system_prompt}`;
 
             // 6.a-2 Add attached file names
             const { data: documents } = await supabase
