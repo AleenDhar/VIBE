@@ -191,6 +191,21 @@ export interface UserAggregate {
     project_count: number;
 }
 
+/**
+ * Fetches per-user chat aggregates for the Omnivision dashboard.
+ *
+ * Both `fromDate` and `toDate` must be plain calendar dates in `YYYY-MM-DD`
+ * form (no time, no timezone). The RPC resolves the window against the
+ * Asia/Kolkata business timezone server-side, so the same label returns
+ * the same numbers regardless of the viewer's browser timezone.
+ *
+ * A chat is counted for a user when any of its `chat_messages` landed
+ * inside the window — i.e., based on activity, not chat creation date.
+ * Chats with `user_id IS NULL` appear as a synthetic "(unattributed)"
+ * row (see SENTINEL_ORPHAN_USER_ID) instead of silently vanishing.
+ */
+export const SENTINEL_ORPHAN_USER_ID = "00000000-0000-0000-0000-000000000000";
+
 export async function getOmnivisionUserAggregates(fromDate?: string, toDate?: string) {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
@@ -210,45 +225,53 @@ export async function getOmnivisionUserAggregates(fromDate?: string, toDate?: st
         console.error("Error fetching user aggregates:", error);
         return [];
     }
-    
+
     // Default null texts to empty to match expected format
     return (data || []) as UserAggregate[];
 }
 
 // 5b. Get chats for a specific user on-demand
+/**
+ * Drill-down chat list for Omnivision. Delegates to the
+ * `get_omnivision_chats_for_user` RPC so the list always matches the
+ * aggregate's semantics: activity-based filter, IST-pinned boundaries,
+ * orphan bucket served when `targetUserId === SENTINEL_ORPHAN_USER_ID`.
+ *
+ * `fromDate` / `toDate` must be `YYYY-MM-DD` strings.
+ */
 export async function getOmnivisionChatsForUser(targetUserId: string, fromDate?: string, toDate?: string) {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
 
     const supabase = await createClient();
 
-    // Fetch all chats for this user (up to 1000 for safety)
-    let query = supabase
-        .from("chats")
-        .select("id, title, created_at, updated_at, project_id, user_id")
-        .eq("user_id", targetUserId)
-        .order("created_at", { ascending: false })
-        .limit(1000);
+    const rpcParams: Record<string, string> = { target_user_id: targetUserId };
+    if (fromDate) rpcParams.from_date = fromDate;
+    if (toDate) rpcParams.to_date = toDate;
 
-    if (fromDate) query = query.gte("created_at", fromDate);
-    if (toDate) query = query.lte("created_at", toDate);
-
-    const { data: chats, error: chatsError } = await query;
+    const { data: chats, error: chatsError } = await supabase
+        .rpc("get_omnivision_chats_for_user", rpcParams);
 
     if (chatsError) {
         console.error("Error fetching chats for user:", chatsError);
         return [];
     }
 
-    // Fetch the target user's profile
-    const { data: profileData } = await supabase
-        .from("profiles")
-        .select("full_name, role, avatar_url")
-        .eq("id", targetUserId)
-        .single();
+    // Fetch the target user's profile (orphan sentinel has no real profile)
+    let profileData: { full_name: string | null; role: string | null; avatar_url: string | null } | null = null;
+    if (targetUserId !== SENTINEL_ORPHAN_USER_ID) {
+        const { data } = await supabase
+            .from("profiles")
+            .select("full_name, role, avatar_url")
+            .eq("id", targetUserId)
+            .single();
+        profileData = data;
+    } else {
+        profileData = { full_name: "Unattributed chats", role: "unknown", avatar_url: null };
+    }
 
     // Fetch ALL projects via security-definer RPC to resolve names
-    const { data: projects, error: projError } = await supabase
+    const { data: projects } = await supabase
         .rpc("get_all_projects_for_admin");
 
     const projectMap: Record<string, string> = {};
@@ -261,18 +284,14 @@ export async function getOmnivisionChatsForUser(targetUserId: string, fromDate?:
         lastStatusMap[s.chat_id] = s.last_type;
     });
 
-    // Merge and filter out empty chats
-    // A chat only exists in lastStatusMap if it has at least one message row.
-    return (chats || [])
-        .filter(chat => lastStatusMap[chat.id] !== undefined)
-        .map(chat => {
-            return {
-                ...chat,
-                project_name: chat.project_id ? (projectMap[chat.project_id] ?? null) : null,
-                last_msg_type: lastStatusMap[chat.id] ?? null,
-                profiles: profileData || null,
-            };
-    });
+    // The RPC already guarantees at least one message in window, so no
+    // empty-chat filtering is needed here. Map metadata in.
+    return (chats || []).map((chat: any) => ({
+        ...chat,
+        project_name: chat.project_id ? (projectMap[chat.project_id] ?? null) : null,
+        last_msg_type: lastStatusMap[chat.id] ?? null,
+        profiles: profileData,
+    }));
 }
 
 // 6. Get chat messages for omnivision
