@@ -9,7 +9,8 @@ import {
 import { formatDistanceToNow, subDays, format } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult, SENTINEL_ORPHAN_USER_ID } from "@/lib/actions/admin";
+import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult } from "@/lib/actions/admin";
+import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
 
 /**
  * Omnivision range bounds are plain calendar dates resolved server-side

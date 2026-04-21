@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
 
 // 1. Verify Admin Status (Server-side) - also allows super_admin
 export async function verifyAdmin() {
@@ -202,10 +203,9 @@ export interface UserAggregate {
  * A chat is counted for a user when any of its `chat_messages` landed
  * inside the window — i.e., based on activity, not chat creation date.
  * Chats with `user_id IS NULL` appear as a synthetic "(unattributed)"
- * row (see SENTINEL_ORPHAN_USER_ID) instead of silently vanishing.
+ * row (SENTINEL_ORPHAN_USER_ID in lib/omnivision-constants.ts) instead of
+ * silently vanishing.
  */
-export const SENTINEL_ORPHAN_USER_ID = "00000000-0000-0000-0000-000000000000";
-
 export async function getOmnivisionUserAggregates(fromDate?: string, toDate?: string) {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
