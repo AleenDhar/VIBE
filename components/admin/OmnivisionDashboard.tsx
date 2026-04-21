@@ -6,10 +6,29 @@ import {
     ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2, X, FileSearch,
     CalendarDays
 } from "lucide-react";
-import { formatDistanceToNow, subDays, startOfDay, endOfDay, format } from "date-fns";
+import { formatDistanceToNow, subDays, format } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult } from "@/lib/actions/admin";
+import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
+
+/**
+ * Omnivision range bounds are plain calendar dates resolved server-side
+ * against the Asia/Kolkata business timezone. The client just picks the
+ * intended day in IST and stringifies as YYYY-MM-DD so the RPC produces
+ * identical numbers regardless of the viewer's browser timezone.
+ */
+const BIZ_TZ = "Asia/Kolkata";
+const IST_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BIZ_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+});
+function formatIstDate(d: Date): string {
+    // en-CA yields YYYY-MM-DD
+    return IST_DATE_FORMATTER.format(d);
+}
 
 interface OmnivisionChat {
     id: string;
@@ -63,18 +82,24 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
     const [dateLoading, setDateLoading] = useState(false);
 
     const getDateRange = useCallback((): { from?: string; to?: string } => {
+        // Returns IST calendar dates as YYYY-MM-DD so the server RPC can
+        // resolve window boundaries authoritatively. Prevents the browser
+        // timezone from skewing results (Bug 3).
         const now = new Date();
         switch (datePreset) {
             case "today":
-                return { from: startOfDay(now).toISOString(), to: endOfDay(now).toISOString() };
+                return { from: formatIstDate(now), to: formatIstDate(now) };
             case "7d":
-                return { from: startOfDay(subDays(now, 7)).toISOString(), to: endOfDay(now).toISOString() };
+                return { from: formatIstDate(subDays(now, 7)), to: formatIstDate(now) };
             case "30d":
-                return { from: startOfDay(subDays(now, 30)).toISOString(), to: endOfDay(now).toISOString() };
+                return { from: formatIstDate(subDays(now, 30)), to: formatIstDate(now) };
             case "custom":
+                // Custom picker already produces YYYY-MM-DD strings; pass
+                // them through untouched so we honour exactly what the
+                // user typed, interpreted as IST dates server-side.
                 return {
-                    from: dateFrom ? startOfDay(new Date(dateFrom)).toISOString() : undefined,
-                    to: dateTo ? endOfDay(new Date(dateTo)).toISOString() : undefined,
+                    from: dateFrom || undefined,
+                    to: dateTo || undefined,
                 };
             default:
                 return {};
@@ -98,20 +123,20 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
 
             switch (preset) {
                 case "today":
-                    from = startOfDay(now).toISOString();
-                    to = endOfDay(now).toISOString();
+                    from = formatIstDate(now);
+                    to = formatIstDate(now);
                     break;
                 case "7d":
-                    from = startOfDay(subDays(now, 7)).toISOString();
-                    to = endOfDay(now).toISOString();
+                    from = formatIstDate(subDays(now, 7));
+                    to = formatIstDate(now);
                     break;
                 case "30d":
-                    from = startOfDay(subDays(now, 30)).toISOString();
-                    to = endOfDay(now).toISOString();
+                    from = formatIstDate(subDays(now, 30));
+                    to = formatIstDate(now);
                     break;
                 case "custom":
-                    from = (customFrom || dateFrom) ? startOfDay(new Date(customFrom || dateFrom)).toISOString() : undefined;
-                    to = (customTo || dateTo) ? endOfDay(new Date(customTo || dateTo)).toISOString() : undefined;
+                    from = (customFrom || dateFrom) || undefined;
+                    to = (customTo || dateTo) || undefined;
                     break;
             }
 
@@ -226,7 +251,13 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
     });
 
     const allUsersList = Object.values(users);
-    const totalUsers = allUsersList.filter(u => Number(u.chat_count) > 0 || datePreset === "all").length;
+    // The "(unattributed)" synthetic entry carries chats with user_id = NULL
+    // so totals aren't understated (Bug 4). It is NOT a real user, so it
+    // must be excluded from the user count but included in the chat count.
+    const totalUsers = allUsersList.filter(u =>
+        u.user_id !== SENTINEL_ORPHAN_USER_ID &&
+        (Number(u.chat_count) > 0 || datePreset === "all")
+    ).length;
     const totalChats = allUsersList.reduce((acc, curr) => acc + Number(curr.chat_count), 0);
 
     // ── Toggle helpers ───────────────────────────────────────────────────
