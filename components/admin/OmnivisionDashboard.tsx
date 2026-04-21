@@ -4,12 +4,21 @@ import { useState, useRef, useCallback } from "react";
 import {
     Eye, Search, MessageSquare, User, ChevronDown, ChevronRight,
     ArrowLeft, Clock, Filter, FolderOpen, ExternalLink, Inbox, Loader2, X, FileSearch,
-    CalendarDays
+    CalendarDays, Repeat2, AlertTriangle, Info
 } from "lucide-react";
 import { formatDistanceToNow, subDays, format } from "date-fns";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { UserAggregate, getOmnivisionChatsForUser, searchOmnivisionMessages, MessageSearchResult } from "@/lib/actions/admin";
+import {
+    UserAggregate,
+    getOmnivisionChatsForUser,
+    searchOmnivisionMessages,
+    MessageSearchResult,
+    getAbmRunCountsByUser,
+    getAbmRunsForChat,
+    AbmRunCountsByUser,
+    AbmRunForChat,
+} from "@/lib/actions/admin";
 import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
 
 /**
@@ -56,29 +65,53 @@ interface UserState extends UserAggregate {
     isLoaded?: boolean;
     isLoading?: boolean;
     projects?: ProjectGroup[];
+    // ABM reuse signal for this user in the selected window. Populated by
+    // the same initial fetch + date-filter flow as `chat_count`. When
+    // `chats_with_reuse > 0`, the UI paints a reuse badge on this row.
+    abmReuse?: AbmRunCountsByUser;
 }
 
 type DatePreset = "all" | "today" | "7d" | "30d" | "custom";
 
-export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: UserAggregate[] }) {
+export function OmnivisionDashboard({
+    initialAggregates,
+    initialAbmReuse = [],
+}: {
+    initialAggregates: UserAggregate[];
+    initialAbmReuse?: AbmRunCountsByUser[];
+}) {
     const [searchQuery, setSearchQuery] = useState("");
     const [filterRole, setFilterRole] = useState("all");
     const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
     const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
     const [users, setUsers] = useState<Record<string, UserState>>(() => {
+        // Index the ABM reuse data by user_id once so we can splice it into
+        // every user row's initial state without a per-row lookup.
+        const reuseMap: Record<string, AbmRunCountsByUser> = {};
+        for (const r of initialAbmReuse) reuseMap[r.user_id] = r;
+
         const init: Record<string, UserState> = {};
         for (const u of initialAggregates) {
-            init[u.user_id] = { ...u, projects: [] };
+            init[u.user_id] = { ...u, projects: [], abmReuse: reuseMap[u.user_id] };
         }
         return init;
     });
+
+    // Per-chat run counts, populated lazily when a user is expanded.
+    // Keyed by chat_id so we can stamp a reuse badge on individual chats
+    // without re-fetching on every toggle.
+    const [chatAbmRuns, setChatAbmRuns] = useState<Record<string, AbmRunForChat[]>>({});
 
     // ── Date filter state ──────────────────────────────────────────────
     const [datePreset, setDatePreset] = useState<DatePreset>("all");
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [showDatePicker, setShowDatePicker] = useState(false);
+    // Whether the "what does this reuse number mean?" panel is open.
+    // Defaulted to closed so it doesn't crowd the header on load, but a
+    // one-click toggle gives any viewer a full explanation.
+    const [showReuseHelp, setShowReuseHelp] = useState(false);
     const [dateLoading, setDateLoading] = useState(false);
 
     const getDateRange = useCallback((): { from?: string; to?: string } => {
@@ -141,13 +174,23 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
             }
 
             const { getOmnivisionUserAggregates } = await import("@/lib/actions/admin");
-            const newAggregates = await getOmnivisionUserAggregates(from, to);
+            // Fetch aggregates and ABM reuse for the new window in parallel
+            // so the badge state stays in sync with the chat counts.
+            const [newAggregates, newAbmReuse] = await Promise.all([
+                getOmnivisionUserAggregates(from, to),
+                getAbmRunCountsByUser(from, to),
+            ]);
+
+            const reuseMap: Record<string, AbmRunCountsByUser> = {};
+            for (const r of newAbmReuse) reuseMap[r.user_id] = r;
 
             const updated: Record<string, UserState> = {};
             for (const u of newAggregates) {
-                updated[u.user_id] = { ...u, projects: [] };
+                updated[u.user_id] = { ...u, projects: [], abmReuse: reuseMap[u.user_id] };
             }
             setUsers(updated);
+            // Drop per-chat run cache — stale once the window shifts.
+            setChatAbmRuns({});
         } catch (err) {
             console.error("Failed to apply date filter:", err);
         } finally {
@@ -260,6 +303,24 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
     ).length;
     const totalChats = allUsersList.reduce((acc, curr) => acc + Number(curr.chat_count), 0);
 
+    // Window-level ABM reuse roll-up, computed from the per-user reuse
+    // metrics that accompany the current aggregate view. Gives super
+    // admins a one-glance "are users abusing chat reuse this period?"
+    // signal without drilling into individual rows.
+    const reuseSummary = allUsersList.reduce(
+        (acc, u) => {
+            const r = u.abmReuse;
+            if (!r) return acc;
+            acc.totalRuns += Number(r.run_count) || 0;
+            acc.totalAccounts += Number(r.distinct_accounts) || 0;
+            acc.chatsWithReuse += Number(r.chats_with_reuse) || 0;
+            acc.usersWithReuse += Number(r.chats_with_reuse) > 0 ? 1 : 0;
+            acc.worstChatRuns = Math.max(acc.worstChatRuns, Number(r.max_runs_in_one_chat) || 0);
+            return acc;
+        },
+        { totalRuns: 0, totalAccounts: 0, chatsWithReuse: 0, usersWithReuse: 0, worstChatRuns: 0 }
+    );
+
     // ── Toggle helpers ───────────────────────────────────────────────────
     const toggleUser = async (uid: string) => {
         setExpandedUsers(prev => {
@@ -303,6 +364,32 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                     ...prev,
                     [uid]: { ...prev[uid], isLoaded: true, isLoading: false, projects: sortedProjects }
                 }));
+
+                // If this user has any reused chats in the window, fetch
+                // per-chat ABM run data for every chat we just loaded so
+                // the reuse badges can render without a per-click fetch.
+                // Capped at 50 chats of concurrency to avoid hammering the
+                // RPC for heavy users.
+                const chatIds: string[] = fetchedChats
+                    .map((c: { id: string }) => c.id)
+                    .filter((id: string) => !(id in chatAbmRuns));
+                if (chatIds.length > 0 && users[uid]?.abmReuse?.run_count) {
+                    const results = await Promise.all(
+                        chatIds.slice(0, 50).map(async (cid: string) => {
+                            try {
+                                const runs = await getAbmRunsForChat(cid);
+                                return [cid, runs] as const;
+                            } catch {
+                                return [cid, [] as AbmRunForChat[]] as const;
+                            }
+                        })
+                    );
+                    setChatAbmRuns(prev => {
+                        const next = { ...prev };
+                        for (const [cid, runs] of results) next[cid] = runs;
+                        return next;
+                    });
+                }
             } catch (err) {
                 console.error("Failed to load user chats", err);
                 setUsers(prev => ({ ...prev, [uid]: { ...prev[uid], isLoading: false } }));
@@ -329,6 +416,63 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
             Live
         </span>
     );
+
+    // Surface when a user has reused a single chat_id for multiple ABM runs
+    // against different Salesforce accounts — the exact pattern we want to
+    // discourage (context bloat, cross-contamination, broken per-account
+    // attribution). Tooltip explains what "reused" means in plain language
+    // so a viewer doesn't need any external docs to interpret it.
+    const ReuseUserBadge = ({ reuse }: { reuse: AbmRunCountsByUser }) => {
+        if (!reuse || !reuse.chats_with_reuse || Number(reuse.chats_with_reuse) <= 0) return null;
+        const chatsWithReuse = Number(reuse.chats_with_reuse);
+        const maxRuns = Number(reuse.max_runs_in_one_chat);
+        const tip =
+            `${chatsWithReuse} of this person's conversations were reused for more than one Salesforce account.\n\n` +
+            `Worst conversation: ${maxRuns} ABMs stacked into a single session.\n\n` +
+            `Why this matters: each extra ABM in the same conversation wastes budget (later ` +
+            `ABMs re-read everything that came before), risks one account's content leaking into ` +
+            `another's emails, and makes per-account results impossible to separate. ` +
+            `Expected value: 0.`;
+        return (
+            <span
+                title={tip}
+                aria-label={`${chatsWithReuse} chats reused for multi-account ABM, worst is ${maxRuns} runs`}
+                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/25 font-medium leading-none flex-shrink-0 cursor-help"
+            >
+                <Repeat2 className="h-3 w-3" />
+                {chatsWithReuse} reused · max {maxRuns}
+            </span>
+        );
+    };
+
+    // Per-chat reuse badge. Appears on a chat row when that single chat
+    // produced more than one ABM run. A marker-row count is higher-trust
+    // than a heuristic-row count; tooltip discloses which and lists the
+    // accounts so a viewer can eyeball cross-contamination risk.
+    const ReuseChatBadge = ({ runs }: { runs: AbmRunForChat[] | undefined }) => {
+        if (!runs || runs.length <= 1) return null;
+        const distinctAccounts = new Set(runs.map(r => r.account_id)).size;
+        const accountsPreview = Array.from(new Set(runs.map(r => r.account_id)))
+            .slice(0, 5)
+            .join(", ");
+        const moreAccts = distinctAccounts > 5 ? ` (+${distinctAccounts - 5} more)` : "";
+        const tip =
+            `This single conversation was used to run ${runs.length} ABMs across ${distinctAccounts} ` +
+            `Salesforce account${distinctAccounts === 1 ? "" : "s"}.\n\n` +
+            `Accounts: ${accountsPreview}${moreAccts}\n\n` +
+            `Expected: 1 ABM per conversation. Anything higher means the same conversation was ` +
+            `reused for another account instead of starting a new one.`;
+        return (
+            <span
+                title={tip}
+                aria-label={`${runs.length} ABM runs in this chat across ${distinctAccounts} accounts`}
+                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/25 font-medium leading-none flex-shrink-0 cursor-help"
+            >
+                <Repeat2 className="h-3 w-3" />
+                {runs.length} runs · {distinctAccounts} accts
+            </span>
+        );
+    };
 
     const RoleBadge = ({ role }: { role: string | null }) => {
         if (role === "super_admin")
@@ -384,7 +528,7 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                     </div>
 
                     {/* Stats */}
-                    <div className="flex items-center gap-5 text-sm">
+                    <div className="flex items-center gap-5 text-sm flex-wrap">
                         <span className="flex items-center gap-1.5 text-muted-foreground">
                             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                             <strong className="text-foreground">{totalUsers}</strong> users
@@ -393,7 +537,98 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                             <MessageSquare className="h-3.5 w-3.5 opacity-50" />
                             <strong className="text-foreground">{totalChats}</strong> chats
                         </span>
+                        {reuseSummary.chatsWithReuse > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => setShowReuseHelp(v => !v)}
+                                className="flex items-center gap-1.5 text-rose-400 hover:text-rose-300 transition-colors cursor-help"
+                                title="Click for a full explanation of how this number is calculated and why it matters"
+                                aria-expanded={showReuseHelp}
+                            >
+                                <AlertTriangle className="h-3.5 w-3.5 opacity-70" />
+                                <strong className="text-rose-300">{reuseSummary.chatsWithReuse}</strong>
+                                &nbsp;chat{reuseSummary.chatsWithReuse === 1 ? "" : "s"} reused for multi-account ABM
+                                <span className="text-muted-foreground/50">
+                                    {" "}(worst: {reuseSummary.worstChatRuns} runs)
+                                </span>
+                                <Info className="h-3 w-3 opacity-60" />
+                            </button>
+                        )}
                     </div>
+
+                    {/* Explainer panel — one-click toggle from the reuse strip above. */}
+                    {showReuseHelp && reuseSummary.chatsWithReuse > 0 && (
+                        <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-4 text-xs leading-relaxed text-foreground/80 space-y-2.5">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2 text-rose-300 font-semibold">
+                                    <AlertTriangle className="h-4 w-4" />
+                                    What does &quot;reused for multi-account ABM&quot; mean?
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowReuseHelp(false)}
+                                    className="text-muted-foreground/60 hover:text-foreground"
+                                    aria-label="Close"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            </div>
+                            <p>
+                                Each ABM conversation is meant to focus on <strong>one Salesforce account</strong> —
+                                the agent researches that account, drafts its emails, and pushes its contacts into
+                                Lemlist. A <strong>reused</strong> conversation is one where someone ran ABMs for
+                                <strong> two or more accounts inside the same conversation </strong>
+                                instead of starting a fresh one for each. This dashboard surfaces when that happens.
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                                <div className="rounded-lg bg-background/40 border border-border/30 px-3 py-2">
+                                    <div className="text-[11px] uppercase tracking-wider text-muted-foreground/60 mb-1">
+                                        Badge next to a name <span className="text-rose-400">🔁 N reused · max M</span>
+                                    </div>
+                                    <p className="text-[11px]">
+                                        <strong>N</strong> = how many of this person&apos;s conversations were used for
+                                        more than one account.
+                                        <br />
+                                        <strong>M</strong> = the worst offender&apos;s count. M = 9 means a single
+                                        conversation was reused for 9 different accounts.
+                                    </p>
+                                </div>
+                                <div className="rounded-lg bg-background/40 border border-border/30 px-3 py-2">
+                                    <div className="text-[11px] uppercase tracking-wider text-muted-foreground/60 mb-1">
+                                        Line below the name <span className="text-rose-400">&quot;N ABM runs across M accounts&quot;</span>
+                                    </div>
+                                    <p className="text-[11px]">
+                                        Total ABMs this person ran in the selected period, across how many distinct
+                                        accounts. This is a volume stat — high numbers aren&apos;t bad by themselves.
+                                        Only the badge above flags a problem.
+                                    </p>
+                                </div>
+                                <div className="rounded-lg bg-background/40 border border-border/30 px-3 py-2">
+                                    <div className="text-[11px] uppercase tracking-wider text-muted-foreground/60 mb-1">
+                                        Badge on a conversation <span className="text-rose-400">🔁 N runs · A accts</span>
+                                    </div>
+                                    <p className="text-[11px]">
+                                        Shown on individual conversations after expanding a user. Hover it to see which
+                                        Salesforce accounts were stacked into that one conversation.
+                                    </p>
+                                </div>
+                                <div className="rounded-lg bg-background/40 border border-border/30 px-3 py-2">
+                                    <div className="text-[11px] uppercase tracking-wider text-muted-foreground/60 mb-1">
+                                        Why it matters
+                                    </div>
+                                    <p className="text-[11px]">
+                                        Stacking multiple accounts into one conversation wastes budget (later accounts
+                                        re-read earlier work), risks one account&apos;s content leaking into another&apos;s
+                                        emails, and makes it impossible to measure cost or results per account.
+                                    </p>
+                                </div>
+                            </div>
+                            <p className="text-muted-foreground/60 text-[11px] pt-1">
+                                Counts reflect the date range selected above. Older activity is reconstructed from past
+                                conversations; new activity is tracked as it happens.
+                            </p>
+                        </div>
+                    )}
 
                     {/* Search + filter */}
                     <div className="flex gap-2">
@@ -652,11 +887,28 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                                             <p className="font-medium text-sm flex items-center gap-2 flex-wrap">
                                                 {user.full_name || user.username || "Unknown User"}
                                                 <RoleBadge role={user.role} />
+                                                {user.abmReuse && <ReuseUserBadge reuse={user.abmReuse} />}
                                             </p>
                                             <p className="text-xs text-muted-foreground/50 mt-0.5">
                                                 {user.chat_count} chat{user.chat_count !== 1 ? "s" : ""}
                                                 {" · "}
                                                 {user.project_count} project{user.project_count !== 1 ? "s" : ""}
+                                                {user.abmReuse && Number(user.abmReuse.run_count) > 0 && (
+                                                    <>
+                                                        {" · "}
+                                                        <span
+                                                            className="text-rose-400/70 cursor-help"
+                                                            title={
+                                                                `Total ABMs this person has run in the selected period, and how many distinct ` +
+                                                                `Salesforce accounts they worked on. This is a volume stat — high numbers aren't ` +
+                                                                `bad on their own. Only the badge next to the name flags actual reuse problems.`
+                                                            }
+                                                        >
+                                                            {user.abmReuse.run_count} ABM run{Number(user.abmReuse.run_count) === 1 ? "" : "s"}
+                                                            {" "}across {user.abmReuse.distinct_accounts} account{Number(user.abmReuse.distinct_accounts) === 1 ? "" : "s"}
+                                                        </span>
+                                                    </>
+                                                )}
                                             </p>
                                         </div>
                                     </div>
@@ -737,6 +989,7 @@ export function OmnivisionDashboard({ initialAggregates }: { initialAggregates: 
                                                                             <p className="text-sm text-foreground/75 truncate group-hover:text-foreground transition-colors flex items-center gap-2">
                                                                                 {chat.title || "Untitled Chat"}
                                                                                 {isLive(chat) && <LiveBadge />}
+                                                                                <ReuseChatBadge runs={chatAbmRuns[chat.id]} />
                                                                             </p>
                                                                             <p className="text-[11px] text-muted-foreground/40 flex items-center gap-1 mt-0.5">
                                                                                 <Clock className="h-2.5 w-2.5" />
