@@ -368,6 +368,51 @@ export async function getAbmRunsForChat(chatId: string): Promise<AbmRunForChat[]
     return (data || []) as AbmRunForChat[];
 }
 
+/**
+ * Flagged-chats list for the "jump to offenders" panel on the Omnivision
+ * dashboard. One row per chat that had more than one ABM run in the
+ * selected IST window, sorted most-runs-first.
+ *
+ * Includes owner + project metadata so the panel can render direct links
+ * without a second round-trip.
+ */
+export interface FlaggedAbmChat {
+    chat_id: string;
+    chat_title: string | null;
+    project_id: string | null;
+    project_name: string | null;
+    owner_user_id: string | null;
+    owner_username: string | null;
+    owner_full_name: string | null;
+    owner_role: string | null;
+    runs: number;
+    distinct_accounts: number;
+    account_ids: string[];
+    first_run_at: string;
+    last_run_at: string;
+}
+
+export async function getFlaggedAbmChats(fromDate?: string, toDate?: string): Promise<FlaggedAbmChat[]> {
+    const isSuperAdmin = await verifySuperAdmin();
+    if (!isSuperAdmin) return [];
+
+    const supabase = await createClient();
+
+    const rpcParams: Record<string, string> = {};
+    if (fromDate) rpcParams.from_date = fromDate;
+    if (toDate) rpcParams.to_date = toDate;
+
+    const { data, error } = await supabase
+        .rpc("get_flagged_abm_chats", Object.keys(rpcParams).length > 0 ? rpcParams : undefined);
+
+    if (error) {
+        console.error("Error fetching flagged ABM chats:", error);
+        return [];
+    }
+
+    return (data || []) as FlaggedAbmChat[];
+}
+
 // 6. Get chat messages for omnivision
 export async function getChatMessagesForOmnivision(chatId: string) {
     const isSuperAdmin = await verifySuperAdmin();

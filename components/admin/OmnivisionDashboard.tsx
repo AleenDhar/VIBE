@@ -16,8 +16,10 @@ import {
     MessageSearchResult,
     getAbmRunCountsByUser,
     getAbmRunsForChat,
+    getFlaggedAbmChats,
     AbmRunCountsByUser,
     AbmRunForChat,
+    FlaggedAbmChat,
 } from "@/lib/actions/admin";
 import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
 
@@ -112,6 +114,15 @@ export function OmnivisionDashboard({
     // Defaulted to closed so it doesn't crowd the header on load, but a
     // one-click toggle gives any viewer a full explanation.
     const [showReuseHelp, setShowReuseHelp] = useState(false);
+
+    // Flagged-chats drill-down sheet state. Lazily fetches the list the
+    // first time it's opened for a given window; cached until the window
+    // changes (via applyDateFilter) or the user manually refreshes.
+    const [showFlaggedSheet, setShowFlaggedSheet] = useState(false);
+    const [flaggedChats, setFlaggedChats] = useState<FlaggedAbmChat[] | null>(null);
+    const [flaggedLoading, setFlaggedLoading] = useState(false);
+    const [flaggedSort, setFlaggedSort] = useState<"runs" | "recent">("runs");
+    const [flaggedQuery, setFlaggedQuery] = useState("");
     const [dateLoading, setDateLoading] = useState(false);
 
     const getDateRange = useCallback((): { from?: string; to?: string } => {
@@ -191,6 +202,9 @@ export function OmnivisionDashboard({
             setUsers(updated);
             // Drop per-chat run cache — stale once the window shifts.
             setChatAbmRuns({});
+            // Drop the flagged-chats list too; it was scoped to the old
+            // window. It will re-fetch next time the sheet is opened.
+            setFlaggedChats(null);
         } catch (err) {
             console.error("Failed to apply date filter:", err);
         } finally {
@@ -321,6 +335,41 @@ export function OmnivisionDashboard({
         { totalRuns: 0, totalAccounts: 0, chatsWithReuse: 0, usersWithReuse: 0, worstChatRuns: 0 }
     );
 
+    // ── Flagged-chats sheet opener ───────────────────────────────────────
+    // Opens the right-side drill-down sheet, lazily fetching the list on
+    // first open for the currently selected window. Cached in
+    // `flaggedChats`; reset to null whenever the date filter changes.
+    const openFlaggedChats = useCallback(async () => {
+        setShowFlaggedSheet(true);
+        if (flaggedChats !== null) return; // already loaded for this window
+        setFlaggedLoading(true);
+        try {
+            const range = getDateRange();
+            const rows = await getFlaggedAbmChats(range.from, range.to);
+            setFlaggedChats(rows);
+        } catch (err) {
+            console.error("Failed to load flagged chats", err);
+            setFlaggedChats([]);
+        } finally {
+            setFlaggedLoading(false);
+        }
+    }, [flaggedChats, getDateRange]);
+
+    // Click a user's reuse pill → expand that user so their reused chats
+    // (each carrying a red per-chat badge) become visible inline. Smooth-
+    // scrolls to the user row after the expand animation.
+    const jumpToUser = useCallback((uid: string) => {
+        if (!expandedUsers.has(uid)) {
+            toggleUser(uid);
+        }
+        // Next tick so the expanded DOM exists before we try to scroll.
+        setTimeout(() => {
+            const el = document.getElementById(`om-user-${uid}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 50);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [expandedUsers]);
+
     // ── Toggle helpers ───────────────────────────────────────────────────
     const toggleUser = async (uid: string) => {
         setExpandedUsers(prev => {
@@ -422,22 +471,42 @@ export function OmnivisionDashboard({
     // discourage (context bloat, cross-contamination, broken per-account
     // attribution). Tooltip explains what "reused" means in plain language
     // so a viewer doesn't need any external docs to interpret it.
-    const ReuseUserBadge = ({ reuse }: { reuse: AbmRunCountsByUser }) => {
+    const ReuseUserBadge = ({ reuse, userId }: { reuse: AbmRunCountsByUser; userId: string }) => {
         if (!reuse || !reuse.chats_with_reuse || Number(reuse.chats_with_reuse) <= 0) return null;
         const chatsWithReuse = Number(reuse.chats_with_reuse);
         const maxRuns = Number(reuse.max_runs_in_one_chat);
         const tip =
+            `Click to open this person's conversations below. The reused ones carry the same red badge.\n\n` +
             `${chatsWithReuse} of this person's conversations were reused for more than one Salesforce account.\n\n` +
             `Worst conversation: ${maxRuns} ABMs stacked into a single session.\n\n` +
             `Why this matters: each extra ABM in the same conversation wastes budget (later ` +
             `ABMs re-read everything that came before), risks one account's content leaking into ` +
             `another's emails, and makes per-account results impossible to separate. ` +
             `Expected value: 0.`;
+        // NOTE: rendered as a <span role="button"> rather than a real <button>
+        // because the parent user-row is already a <button> (click to
+        // expand/collapse), and HTML forbids nested <button> elements.
+        // role=button + tabIndex + Enter/Space handler gives us the same
+        // keyboard/a11y story without the DOM violation. stopPropagation
+        // prevents click from bubbling to the outer expand handler.
+        const handle = (e: React.SyntheticEvent) => {
+            e.stopPropagation();
+            jumpToUser(userId);
+        };
         return (
             <span
+                role="button"
+                tabIndex={0}
+                onClick={handle}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handle(e);
+                    }
+                }}
                 title={tip}
-                aria-label={`${chatsWithReuse} chats reused for multi-account ABM, worst is ${maxRuns} runs`}
-                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/25 font-medium leading-none flex-shrink-0 cursor-help"
+                aria-label={`Open ${chatsWithReuse} reused chats for this person, worst is ${maxRuns} runs`}
+                className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/25 hover:bg-rose-500/25 hover:text-rose-200 font-medium leading-none flex-shrink-0 cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500/40"
             >
                 <Repeat2 className="h-3 w-3" />
                 {chatsWithReuse} reused · max {maxRuns}
@@ -538,21 +607,35 @@ export function OmnivisionDashboard({
                             <strong className="text-foreground">{totalChats}</strong> chats
                         </span>
                         {reuseSummary.chatsWithReuse > 0 && (
-                            <button
-                                type="button"
-                                onClick={() => setShowReuseHelp(v => !v)}
-                                className="flex items-center gap-1.5 text-rose-400 hover:text-rose-300 transition-colors cursor-help"
-                                title="Click for a full explanation of how this number is calculated and why it matters"
-                                aria-expanded={showReuseHelp}
-                            >
+                            <span className="flex items-center gap-1.5 text-rose-400">
                                 <AlertTriangle className="h-3.5 w-3.5 opacity-70" />
-                                <strong className="text-rose-300">{reuseSummary.chatsWithReuse}</strong>
-                                &nbsp;chat{reuseSummary.chatsWithReuse === 1 ? "" : "s"} reused for multi-account ABM
-                                <span className="text-muted-foreground/50">
-                                    {" "}(worst: {reuseSummary.worstChatRuns} runs)
-                                </span>
-                                <Info className="h-3 w-3 opacity-60" />
-                            </button>
+                                {/* Main action: open the drill-down sheet listing every flagged chat. */}
+                                <button
+                                    type="button"
+                                    onClick={openFlaggedChats}
+                                    className="flex items-center gap-1.5 text-rose-400 hover:text-rose-200 transition-colors cursor-pointer underline-offset-4 hover:underline"
+                                    title="Click to see the list of conversations flagged for reuse, with a link to open each"
+                                >
+                                    <strong className="text-rose-300">{reuseSummary.chatsWithReuse}</strong>
+                                    &nbsp;chat{reuseSummary.chatsWithReuse === 1 ? "" : "s"} reused for multi-account ABM
+                                    <span className="text-muted-foreground/50">
+                                        {" "}(worst: {reuseSummary.worstChatRuns} runs)
+                                    </span>
+                                </button>
+                                {/* Secondary action: toggle the inline explainer. Kept as a */}
+                                {/* separate affordance so the primary click goes straight to */}
+                                {/* the actionable list. */}
+                                <button
+                                    type="button"
+                                    onClick={() => setShowReuseHelp(v => !v)}
+                                    className="text-muted-foreground/60 hover:text-foreground transition-colors"
+                                    title="What does this mean?"
+                                    aria-expanded={showReuseHelp}
+                                    aria-label="Show explanation"
+                                >
+                                    <Info className="h-3.5 w-3.5" />
+                                </button>
+                            </span>
                         )}
                     </div>
 
@@ -874,7 +957,8 @@ export function OmnivisionDashboard({
                         return (
                             <div
                                 key={user.user_id}
-                                className="border border-border/30 rounded-xl overflow-hidden bg-card/40 backdrop-blur-sm hover:border-border/60 transition-colors"
+                                id={`om-user-${user.user_id}`}
+                                className="border border-border/30 rounded-xl overflow-hidden bg-card/40 backdrop-blur-sm hover:border-border/60 transition-colors scroll-mt-20"
                             >
                                 {/* ── User row ──────────────────────────── */}
                                 <button
@@ -887,7 +971,7 @@ export function OmnivisionDashboard({
                                             <p className="font-medium text-sm flex items-center gap-2 flex-wrap">
                                                 {user.full_name || user.username || "Unknown User"}
                                                 <RoleBadge role={user.role} />
-                                                {user.abmReuse && <ReuseUserBadge reuse={user.abmReuse} />}
+                                                {user.abmReuse && <ReuseUserBadge reuse={user.abmReuse} userId={user.user_id} />}
                                             </p>
                                             <p className="text-xs text-muted-foreground/50 mt-0.5">
                                                 {user.chat_count} chat{user.chat_count !== 1 ? "s" : ""}
@@ -1011,6 +1095,281 @@ export function OmnivisionDashboard({
                         );
                     })}
                 </div>
+            </div>
+
+            {/* ── Flagged chats side-sheet ─────────────────────────────── */}
+            {showFlaggedSheet && (
+                <FlaggedChatsSheet
+                    chats={flaggedChats}
+                    loading={flaggedLoading}
+                    sort={flaggedSort}
+                    query={flaggedQuery}
+                    onSortChange={setFlaggedSort}
+                    onQueryChange={setFlaggedQuery}
+                    onClose={() => setShowFlaggedSheet(false)}
+                    windowLabel={dateLabel()}
+                />
+            )}
+        </div>
+    );
+}
+
+/**
+ * Right-side slide-in sheet listing every chat flagged for multi-account
+ * ABM reuse in the current window. Each row offers a direct link that
+ * opens the chat in a new tab so the super-admin's audit state (search
+ * query, expanded users) stays intact.
+ *
+ * Receives pre-fetched data; parent handles loading/caching so clicking
+ * in and out of the sheet doesn't refetch.
+ */
+function FlaggedChatsSheet({
+    chats,
+    loading,
+    sort,
+    query,
+    onSortChange,
+    onQueryChange,
+    onClose,
+    windowLabel,
+}: {
+    chats: FlaggedAbmChat[] | null;
+    loading: boolean;
+    sort: "runs" | "recent";
+    query: string;
+    onSortChange: (s: "runs" | "recent") => void;
+    onQueryChange: (q: string) => void;
+    onClose: () => void;
+    windowLabel: string;
+}) {
+    // Apply sort + filter locally (list is small, <500 rows by RPC limit).
+    const visible = (() => {
+        if (!chats) return [];
+        const q = query.trim().toLowerCase();
+        const filtered = q
+            ? chats.filter(c =>
+                (c.owner_username || "").toLowerCase().includes(q) ||
+                (c.owner_full_name || "").toLowerCase().includes(q) ||
+                (c.chat_title || "").toLowerCase().includes(q) ||
+                (c.project_name || "").toLowerCase().includes(q) ||
+                c.account_ids.some(a => a.toLowerCase().includes(q))
+            )
+            : chats;
+        if (sort === "recent") {
+            return [...filtered].sort(
+                (a, b) => new Date(b.last_run_at).getTime() - new Date(a.last_run_at).getTime()
+            );
+        }
+        // "runs" (default): backend already returns this order, but resort in
+        // case the filter changed the visible set.
+        return [...filtered].sort((a, b) =>
+            Number(b.runs) - Number(a.runs) ||
+            new Date(b.last_run_at).getTime() - new Date(a.last_run_at).getTime()
+        );
+    })();
+
+    const chatHref = (c: FlaggedAbmChat) =>
+        c.project_id ? `/projects/${c.project_id}/chat/${c.chat_id}` : `/chat/${c.chat_id}`;
+
+    return (
+        <>
+            {/* Backdrop — click to close */}
+            <div
+                className="fixed inset-0 z-40 bg-background/70 backdrop-blur-sm animate-in fade-in-0 duration-200"
+                onClick={onClose}
+                aria-hidden="true"
+            />
+
+            {/* Panel */}
+            <aside
+                role="dialog"
+                aria-modal="true"
+                aria-label="Conversations reused for multiple ABM accounts"
+                className="fixed right-0 top-0 z-50 h-screen w-full sm:w-[540px] lg:w-[640px] bg-background border-l border-border/30 shadow-2xl shadow-black/40 flex flex-col animate-in slide-in-from-right-4 duration-200"
+            >
+                {/* Header */}
+                <div className="flex items-start justify-between gap-3 p-4 border-b border-border/30">
+                    <div className="min-w-0">
+                        <h2 className="text-lg font-semibold flex items-center gap-2 text-rose-300">
+                            <Repeat2 className="h-4 w-4" />
+                            Conversations reused for multiple ABM accounts
+                        </h2>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Each conversation below was used to run ABMs for 2 or more Salesforce accounts.
+                            Open a chat to review the context and decide if content leaked between accounts.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground/60 mt-1">
+                            {windowLabel}
+                            {chats !== null && ` · ${visible.length} of ${chats.length} shown`}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="text-muted-foreground/60 hover:text-foreground flex-shrink-0"
+                        aria-label="Close"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+
+                {/* Toolbar */}
+                <div className="flex items-center gap-2 p-3 border-b border-border/20">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/40 pointer-events-none" />
+                        <input
+                            type="text"
+                            placeholder="Search by user, chat title, project, or account ID…"
+                            value={query}
+                            onChange={e => onQueryChange(e.target.value)}
+                            className="w-full bg-muted/30 border border-border/20 rounded-lg py-1.5 pl-8 pr-3 text-xs focus:outline-none focus:ring-1 focus:ring-rose-500/30 placeholder:text-muted-foreground/30"
+                        />
+                    </div>
+                    <div className="flex bg-muted/30 border border-border/20 rounded-lg overflow-hidden">
+                        <button
+                            type="button"
+                            onClick={() => onSortChange("runs")}
+                            className={cn(
+                                "px-2.5 py-1.5 text-[11px] transition-colors",
+                                sort === "runs"
+                                    ? "bg-rose-500/20 text-rose-300"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                            title="Sort by most runs first"
+                        >
+                            Most runs
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onSortChange("recent")}
+                            className={cn(
+                                "px-2.5 py-1.5 text-[11px] transition-colors",
+                                sort === "recent"
+                                    ? "bg-rose-500/20 text-rose-300"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                            title="Sort by most recent activity"
+                        >
+                            Recent
+                        </button>
+                    </div>
+                </div>
+
+                {/* List */}
+                <div className="flex-1 overflow-y-auto">
+                    {loading && (
+                        <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading flagged chats…
+                        </div>
+                    )}
+                    {!loading && chats !== null && chats.length === 0 && (
+                        <div className="flex flex-col items-center justify-center py-16 text-center px-8">
+                            <div className="text-4xl mb-3">🎉</div>
+                            <p className="text-sm text-foreground/80 font-medium">
+                                No multi-account reuse in this window
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Every ABM ran in its own clean conversation.
+                            </p>
+                        </div>
+                    )}
+                    {!loading && chats !== null && visible.length === 0 && chats.length > 0 && (
+                        <div className="py-16 text-center text-sm text-muted-foreground">
+                            No matches for <span className="text-foreground/80 font-mono">{query}</span>
+                        </div>
+                    )}
+                    {!loading && visible.length > 0 && (
+                        <div className="divide-y divide-border/10">
+                            {visible.map(c => (
+                                <FlaggedChatRow key={c.chat_id} chat={c} href={chatHref(c)} />
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer hint */}
+                <div className="border-t border-border/20 px-4 py-2.5 text-[11px] text-muted-foreground/60">
+                    Expected value per conversation: 1 run. Anything higher means the same conversation
+                    was reused for another account instead of starting a new one.
+                </div>
+            </aside>
+        </>
+    );
+}
+
+function FlaggedChatRow({ chat, href }: { chat: FlaggedAbmChat; href: string }) {
+    const runs = Number(chat.runs);
+    const accts = Number(chat.distinct_accounts);
+    const accountsPreview = chat.account_ids.slice(0, 3).join(", ");
+    const moreAccts = accts > 3 ? ` +${accts - 3} more` : "";
+    const firstAt = chat.first_run_at ? new Date(chat.first_run_at) : null;
+    const lastAt = chat.last_run_at ? new Date(chat.last_run_at) : null;
+    const ownerName = chat.owner_full_name || chat.owner_username || "(unknown)";
+
+    return (
+        <div className="p-3.5 hover:bg-rose-500/5 transition-colors">
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                    {/* Title + severity pill */}
+                    <div className="flex items-start gap-2 flex-wrap">
+                        <p className="text-sm font-medium text-foreground/90 truncate">
+                            {chat.chat_title || "Untitled chat"}
+                        </p>
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-semibold leading-none flex-shrink-0">
+                            <Repeat2 className="h-3 w-3" />
+                            {runs} runs · {accts} accts
+                        </span>
+                    </div>
+                    {/* Owner + project */}
+                    <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1.5 flex-wrap">
+                        <User className="h-3 w-3 opacity-50" />
+                        <span className="text-foreground/70">{ownerName}</span>
+                        {chat.owner_role === "super_admin" && (
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-500 border border-amber-500/30 leading-none">SUPER</span>
+                        )}
+                        {chat.owner_role === "admin" && (
+                            <span className="text-[9px] px-1 py-0.5 rounded bg-primary/20 text-primary border border-primary/30 leading-none">ADMIN</span>
+                        )}
+                        {chat.project_name && (
+                            <>
+                                <span className="text-muted-foreground/40">·</span>
+                                <FolderOpen className="h-3 w-3 opacity-50" />
+                                <span className="text-foreground/60">{chat.project_name}</span>
+                            </>
+                        )}
+                    </p>
+                    {/* Accounts preview */}
+                    <p
+                        className="text-[11px] text-muted-foreground/70 mt-1 font-mono truncate"
+                        title={`All accounts in this conversation: ${chat.account_ids.join(", ")}`}
+                    >
+                        Accounts: {accountsPreview}
+                        <span className="text-muted-foreground/40">{moreAccts}</span>
+                    </p>
+                    {/* Time window */}
+                    {(firstAt || lastAt) && (
+                        <p className="text-[11px] text-muted-foreground/50 mt-1 flex items-center gap-1">
+                            <Clock className="h-2.5 w-2.5" />
+                            {firstAt && format(firstAt, "MMM d HH:mm")}
+                            {firstAt && lastAt && firstAt.getTime() !== lastAt.getTime() && (
+                                <>
+                                    {" "}→ {format(lastAt, "MMM d HH:mm")}
+                                </>
+                            )}
+                        </p>
+                    )}
+                </div>
+                {/* Open link */}
+                <Link
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-shrink-0 inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 hover:text-rose-200 border border-rose-500/25 transition-colors font-medium"
+                    title="Open this conversation in a new tab"
+                >
+                    Open
+                    <ExternalLink className="h-3 w-3" />
+                </Link>
             </div>
         </div>
     );
