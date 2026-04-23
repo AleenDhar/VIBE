@@ -14,3 +14,14 @@
  * headline count while still counting its chats.
  */
 export const SENTINEL_ORPHAN_USER_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Sentinel error message thrown by searchOmnivisionMessages when the
+ * underlying Postgres query is cancelled by statement_timeout. The UI
+ * pattern-matches on this to render a "search timed out" hint that's
+ * distinct from a generic failure or a legitimate empty result.
+ *
+ * Kept here rather than in lib/actions/admin.ts because that module has
+ * a "use server" directive at the top, which forbids non-async exports.
+ */
+export const SEARCH_TIMEOUT_SENTINEL = "OMNIVISION_SEARCH_TIMEOUT";

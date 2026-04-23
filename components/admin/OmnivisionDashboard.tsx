@@ -21,7 +21,7 @@ import {
     AbmRunForChat,
     FlaggedAbmChat,
 } from "@/lib/actions/admin";
-import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
+import { SENTINEL_ORPHAN_USER_ID, SEARCH_TIMEOUT_SENTINEL } from "@/lib/omnivision-constants";
 
 /**
  * Omnivision range bounds are plain calendar dates resolved server-side
@@ -230,6 +230,12 @@ export function OmnivisionDashboard({
     const [msgSearchQuery, setMsgSearchQuery] = useState("");
     const [msgSearchResults, setMsgSearchResults] = useState<MessageSearchResult[]>([]);
     const [msgSearchLoading, setMsgSearchLoading] = useState(false);
+    // Distinct error state so the empty-list UI can tell "DB returned 0 rows"
+    // apart from "DB call failed / timed out". Previously the catch block
+    // silently swallowed timeouts and the UI rendered "No messages found",
+    // which was actively misleading when the real issue was the ILIKE
+    // sequential scan exceeding statement_timeout.
+    const [msgSearchError, setMsgSearchError] = useState<"timeout" | "generic" | null>(null);
     const [showMsgSearch, setShowMsgSearch] = useState(false);
     const msgSearchTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -240,17 +246,25 @@ export function OmnivisionDashboard({
         if (value.trim().length < 2) {
             setMsgSearchResults([]);
             setMsgSearchLoading(false);
+            setMsgSearchError(null);
             return;
         }
 
         setMsgSearchLoading(true);
+        setMsgSearchError(null);
         msgSearchTimer.current = setTimeout(async () => {
             try {
                 const results = await searchOmnivisionMessages(value);
                 setMsgSearchResults(results);
+                setMsgSearchError(null);
             } catch (err) {
                 console.error("Message search failed:", err);
                 setMsgSearchResults([]);
+                // Sentinel from the server action. Matching on message is
+                // resilient to Next.js' dev-mode error wrapping, which
+                // sometimes prefixes the text with "Server Error: …".
+                const msg = err instanceof Error ? err.message : String(err);
+                setMsgSearchError(msg.includes(SEARCH_TIMEOUT_SENTINEL) ? "timeout" : "generic");
             } finally {
                 setMsgSearchLoading(false);
             }
@@ -888,7 +902,23 @@ export function OmnivisionDashboard({
                                 </div>
                             )}
 
-                            {!msgSearchLoading && msgSearchQuery.length >= 2 && msgSearchResults.length === 0 && (
+                            {!msgSearchLoading && msgSearchError === "timeout" && (
+                                <div className="py-4 px-3 text-xs text-rose-300/90 bg-rose-500/5 border border-rose-500/20 rounded-md">
+                                    <div className="font-medium mb-0.5">Search timed out</div>
+                                    <div className="text-muted-foreground/70">
+                                        The server took too long to respond. Try a more specific query
+                                        (longer substring or a unique ID) and retry.
+                                    </div>
+                                </div>
+                            )}
+
+                            {!msgSearchLoading && msgSearchError === "generic" && (
+                                <div className="py-4 px-3 text-xs text-rose-300/90 bg-rose-500/5 border border-rose-500/20 rounded-md">
+                                    Search failed. Please try again in a moment.
+                                </div>
+                            )}
+
+                            {!msgSearchLoading && !msgSearchError && msgSearchQuery.length >= 2 && msgSearchResults.length === 0 && (
                                 <div className="text-center py-4 text-muted-foreground/40 text-xs">
                                     No messages found
                                 </div>
