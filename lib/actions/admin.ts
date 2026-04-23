@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { SENTINEL_ORPHAN_USER_ID } from "@/lib/omnivision-constants";
+import { SENTINEL_ORPHAN_USER_ID, SEARCH_TIMEOUT_SENTINEL } from "@/lib/omnivision-constants";
 
 // 1. Verify Admin Status (Server-side) - also allows super_admin
 export async function verifyAdmin() {
@@ -448,6 +448,11 @@ export interface MessageSearchResult {
     full_name: string | null;
 }
 
+// SEARCH_TIMEOUT_SENTINEL lives in lib/omnivision-constants.ts — server
+// action modules ("use server") can only export async functions, and the
+// UI needs to import the sentinel by value to distinguish timeout from
+// generic error.
+
 export async function searchOmnivisionMessages(query: string): Promise<MessageSearchResult[]> {
     const isSuperAdmin = await verifySuperAdmin();
     if (!isSuperAdmin) return [];
@@ -462,7 +467,17 @@ export async function searchOmnivisionMessages(query: string): Promise<MessageSe
 
     if (error) {
         console.error("Error searching messages:", error);
-        return [];
+        // Postgres statement_timeout cancellation surfaces as SQLSTATE
+        // 57014 ("query_canceled"). Supabase JS sometimes reports it via
+        // the `code` field, other times only inside the message — match
+        // both so either path triggers the distinct UI state.
+        const errCode = (error as { code?: string }).code;
+        const errMsg  = (error as { message?: string }).message ?? "";
+        const isTimeout =
+            errCode === "57014" ||
+            /statement timeout|canceling statement|query_canceled/i.test(errMsg);
+        if (isTimeout) throw new Error(SEARCH_TIMEOUT_SENTINEL);
+        throw new Error(errMsg || "Search failed");
     }
 
     return (data || []) as MessageSearchResult[];
