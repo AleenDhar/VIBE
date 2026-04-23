@@ -58,17 +58,33 @@ export async function updateSystemPrompt(projectId: string, systemPrompt: string
         return { error: "Unauthorized" };
     }
 
-    const { error } = await supabase
+    // .select() so we can count affected rows. Without it, a permission-
+    // denied UPDATE (RLS matches zero rows) returns { error: null } and
+    // the "save" silently no-ops — the exact bug that had admins' v10.0
+    // edits reverting to v9.1 on refresh until the admin-update policy
+    // was added. Keeping the explicit zero-row check as a durable guard
+    // against any future permission regression.
+    const { data: updated, error } = await supabase
         .from("projects")
         .update({ system_prompt: systemPrompt })
-        .eq("id", projectId);
+        .eq("id", projectId)
+        .select("id");
 
     if (error) {
         console.error("Update System Prompt Error:", error);
         return { error: error.message };
     }
 
-    // Log version history
+    if (!updated || updated.length === 0) {
+        console.warn(
+            `Update System Prompt: zero rows affected for project ${projectId} by user ${user.id} — project missing or permission denied`
+        );
+        return { error: "Couldn't update — the project no longer exists or you don't have permission to edit it." };
+    }
+
+    // Version history only on a confirmed successful update. Previously this
+    // ran unconditionally, creating "ghost" version rows for saves that
+    // never actually hit projects.system_prompt.
     await supabase.from("system_prompt_versions").insert({
         project_id: projectId,
         content: systemPrompt,
