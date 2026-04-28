@@ -228,13 +228,6 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
-    const [useTimelineUi, setUseTimelineUi] = useState(false);
-    useEffect(() => {
-        if (typeof window === "undefined") return;
-        if (new URLSearchParams(window.location.search).get("ui") === "timeline") {
-            setUseTimelineUi(true);
-        }
-    }, []);
     const [showUsage, setShowUsage] = useState(false);
     const userScrolledUp = useRef(false);
     const router = useRouter();
@@ -1316,96 +1309,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                                     }
                                                                 }
 
-                                                                if (useTimelineUi) {
-                                                                    const isStreaming = !!msg.isProcessing || (loading && i === messages.length - 1);
-                                                                    return <ToolTimeline key={idx} pairs={pairs} isStreaming={isStreaming} />;
-                                                                }
-
-                                                                return (
-                                                                    <div key={idx} className="flex flex-col gap-2 mb-2">
-                                                                        {pairs.map((pair, pairIdx) => {
-                                                                            const toolName = pair.call.tool || 'tool';
-
-                                                                            // Parse args for display
-                                                                            let argsDisplay = '';
-                                                                            try {
-                                                                                const raw = pair.call.args;
-                                                                                const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                                                                                argsDisplay = JSON.stringify(parsed, null, 2);
-                                                                            } catch {
-                                                                                argsDisplay = typeof pair.call.args === 'string' ? pair.call.args : JSON.stringify(pair.call.args || {});
-                                                                            }
-
-                                                                            // Extract readable text from tool result
-                                                                            let resultText = '';
-                                                                            if (pair.result) {
-                                                                                const raw = pair.result.content || '';
-                                                                                try {
-                                                                                    // Handle JSON array with type/text blocks
-                                                                                    const parsed = JSON.parse(raw);
-                                                                                    if (Array.isArray(parsed)) {
-                                                                                        resultText = parsed.map((b: any) => b.text || b.content || '').join('\n').trim();
-                                                                                    } else {
-                                                                                        resultText = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
-                                                                                    }
-                                                                                } catch {
-                                                                                    // Handle Python-style list strings: [{'type': 'text', 'text': '...'}]
-                                                                                    const textMatches = [...raw.matchAll(/'text'\s*:\s* '((?:[^'\\]|\\.)*)'/g)];
-                                                                                    if (textMatches.length > 0) {
-                                                                                        resultText = textMatches
-                                                                                            .map((m: any) => m[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\'/g, "'").replace(/\\\\/g, '\\'))
-                                                                                            .join('\n')
-                                                                                            .trim();
-                                                                                    } else {
-                                                                                        resultText = raw;
-                                                                                    }
-                                                                                }
-                                                                            }
-
-                                                                            const hasResult = !!resultText.trim();
-                                                                            const resultPreview = resultText.length > 80 ? resultText.slice(0, 80) + '…' : resultText;
-
-                                                                            return (
-                                                                                <details key={pairIdx} className="group/tc border border-border/60 rounded-lg overflow-hidden bg-muted/20 hover:bg-muted/30 transition-colors">
-                                                                                    <summary className="flex items-center gap-2.5 px-3 py-2 cursor-pointer select-none list-none">
-                                                                                        <div className="h-4 w-4 transition-transform group-open/tc:rotate-90 flex-shrink-0 text-muted-foreground">
-                                                                                            <ChevronDown className="h-4 w-4" />
-                                                                                        </div>
-                                                                                        <span className="text-[11px] font-mono font-semibold text-primary/80">{toolName}</span>
-                                                                                        {!hasResult && (
-                                                                                            <span className="ml-auto text-[10px] text-amber-500/80 flex items-center gap-1">
-                                                                                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                                                                                                running…
-                                                                                            </span>
-                                                                                        )}
-                                                                                        {hasResult && (
-                                                                                            <span className="ml-auto text-[10px] text-emerald-500/80 flex items-center gap-1">
-                                                                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                                                                                                done
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </summary>
-                                                                                    <div className="border-t border-border/40 bg-background/40">
-                                                                                        {/* Args */}
-                                                                                        {argsDisplay && (
-                                                                                            <div className="px-3 py-2">
-                                                                                                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1">Input</div>
-                                                                                                <pre className="text-[11px] bg-muted/40 rounded p-2 overflow-x-auto text-foreground/70 font-mono leading-relaxed m-0 whitespace-pre-wrap">{argsDisplay}</pre>
-                                                                                            </div>
-                                                                                        )}
-                                                                                        {/* Result */}
-                                                                                        {hasResult && (
-                                                                                            <div className="px-3 pb-2">
-                                                                                                <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70 mb-1">Result</div>
-                                                                                                <pre className="text-[11px] bg-emerald-500/5 border border-emerald-500/10 rounded p-2 overflow-x-auto max-h-[250px] overflow-y-auto text-foreground/70 font-mono leading-relaxed m-0 whitespace-pre-wrap">{resultText}</pre>
-                                                                                            </div>
-                                                                                        )}
-                                                                                    </div>
-                                                                                </details>
-                                                                            );
-                                                                        })}
-                                                                    </div>
-                                                                );
+                                                                const isStreaming = !!msg.isProcessing || (loading && i === messages.length - 1);
+                                                                return <ToolTimeline key={idx} pairs={pairs} isStreaming={isStreaming} />;
                                                             }
 
                                                             // Handle string/thinking steps

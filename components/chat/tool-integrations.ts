@@ -97,6 +97,23 @@ export function resolveToolIntegration(toolName: string): ToolIntegration {
     return FALLBACK;
 }
 
+/** Convert a raw tool identifier into a human-friendly label.
+ *  Examples:
+ *    mcp__91ab07d8-93da-40b0-8f03-670d3853cb5f__get_apps -> "Get apps"
+ *    salesforce_query -> "Salesforce query"
+ *    find-and-enrich-company -> "Find and enrich company"
+ *    soql -> "Soql"
+ */
+export function humanizeToolName(rawName: string | undefined | null): string {
+    if (!rawName) return "Tool";
+    let name = String(rawName).trim();
+    name = name.replace(/^mcp__[a-zA-Z0-9-]+__/, "");
+    name = name.replace(/^functions\./, "");
+    name = name.replace(/[_\-.]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!name) return "Tool";
+    return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 export function summariseIntegrations(toolNames: string[]): string {
     const seen: string[] = [];
     for (const name of toolNames) {

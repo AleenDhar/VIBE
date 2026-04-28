@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { ChevronDown, Check } from "lucide-react";
-import { resolveToolIntegration, summariseIntegrations } from "./tool-integrations";
+import { resolveToolIntegration, summariseIntegrations, humanizeToolName } from "./tool-integrations";
 
 export interface ToolStepPair {
     call: { tool?: string; args?: string | object | null };
@@ -78,6 +78,7 @@ export function ToolTimeline({ pairs, initiallyOpen = true, isStreaming = false 
                         {visiblePairs.map((pair, idx) => {
                             const toolName = pair.call?.tool || "tool";
                             const { icon: Icon, color } = resolveToolIntegration(toolName);
+                            const displayName = humanizeToolName(toolName);
                             const expanded = expandedRows.has(idx);
                             const running = isStreaming && !hasResult(pair.result);
                             const argsDisplay = formatPayload(pair.call?.args);
@@ -96,7 +97,7 @@ export function ToolTimeline({ pairs, initiallyOpen = true, isStreaming = false 
                                             <Icon className={`h-3.5 w-3.5 ${color} group-hover/tt:opacity-100 opacity-90 transition-opacity`} />
                                         </span>
                                         <span className="text-sm text-muted-foreground/85 group-hover/tt:text-foreground/95 transition-colors">
-                                            {toolName}
+                                            {displayName}
                                         </span>
                                         {running && (
                                             <span className="text-[10px] text-muted-foreground/60 italic">running…</span>
