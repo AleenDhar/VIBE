@@ -18,6 +18,7 @@ import { extractBehavioralInstructions } from "@/lib/actions/instructions";
 import { getActiveModels, getUserAllowedModels, AIModel } from "@/lib/actions/models";
 import { getCurrentUserRole } from "@/lib/actions/admin";
 import { UsagePill } from "@/components/chat/UsagePill";
+import { ToolTimeline } from "@/components/chat/ToolTimeline";
 
 // Shared markdown renderer used for both final content and thinking step content
 function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
@@ -227,6 +228,13 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [uploadingImage, setUploadingImage] = useState(false);
     const [extractingMemory, setExtractingMemory] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
+    const [useTimelineUi, setUseTimelineUi] = useState(false);
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        if (new URLSearchParams(window.location.search).get("ui") === "timeline") {
+            setUseTimelineUi(true);
+        }
+    }, []);
     const [showUsage, setShowUsage] = useState(false);
     const userScrolledUp = useRef(false);
     const router = useRouter();
@@ -1306,6 +1314,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                                     } else {
                                                                         i2++;
                                                                     }
+                                                                }
+
+                                                                if (useTimelineUi) {
+                                                                    const isStreaming = !!msg.isProcessing || (loading && i === messages.length - 1);
+                                                                    return <ToolTimeline key={idx} pairs={pairs} isStreaming={isStreaming} />;
                                                                 }
 
                                                                 return (
