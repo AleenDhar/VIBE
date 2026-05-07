@@ -44,6 +44,31 @@ interface AbmRun {
     chat: { id: string; title: string | null } | null;
 }
 
+// Light, friendly card palette. Each entry uses /10 background + /30 border
+// + 700/300 split text so it reads cleanly in both light and dark themes.
+// Cards are coloured by a hash of account_id so the same account always gets
+// the same hue (visual continuity across multiple runs of the same account).
+const ABM_CARD_PALETTE = [
+    { bg: "bg-sky-500/10",     border: "border-sky-500/30",     accent: "text-sky-700 dark:text-sky-300" },
+    { bg: "bg-emerald-500/10", border: "border-emerald-500/30", accent: "text-emerald-700 dark:text-emerald-300" },
+    { bg: "bg-violet-500/10",  border: "border-violet-500/30",  accent: "text-violet-700 dark:text-violet-300" },
+    { bg: "bg-amber-500/10",   border: "border-amber-500/30",   accent: "text-amber-700 dark:text-amber-300" },
+    { bg: "bg-rose-500/10",    border: "border-rose-500/30",    accent: "text-rose-700 dark:text-rose-300" },
+    { bg: "bg-cyan-500/10",    border: "border-cyan-500/30",    accent: "text-cyan-700 dark:text-cyan-300" },
+    { bg: "bg-indigo-500/10",  border: "border-indigo-500/30",  accent: "text-indigo-700 dark:text-indigo-300" },
+    { bg: "bg-teal-500/10",    border: "border-teal-500/30",    accent: "text-teal-700 dark:text-teal-300" },
+] as const;
+
+// djb2-style stable hash → palette index. Same account_id always lands on
+// the same colour, even across page renders / sessions.
+function pickAbmCardPalette(seed: string) {
+    let h = 5381;
+    for (let i = 0; i < seed.length; i++) {
+        h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
+    }
+    return ABM_CARD_PALETTE[Math.abs(h) % ABM_CARD_PALETTE.length];
+}
+
 interface ProjectPageClientProps {
     project: any;
     isOwner: boolean;
@@ -616,11 +641,12 @@ export function ProjectPageClient({
                                                     {filteredRuns.map((run) => {
                                                         const chatId = run.chat?.id;
                                                         const cardKey = `${chatId ?? "orphan"}-${run.seq}-${run.account_id}`;
+                                                        const palette = pickAbmCardPalette(run.account_id);
 
                                                         const cardInner = (
                                                             <>
                                                                 <div className="flex items-start justify-between gap-2 mb-2">
-                                                                    <span className="text-xs text-muted-foreground">
+                                                                    <span className={`text-xs font-medium ${palette.accent}`}>
                                                                         Run #{run.seq}
                                                                     </span>
                                                                 </div>
@@ -670,14 +696,14 @@ export function ProjectPageClient({
                                                             <Link
                                                                 key={cardKey}
                                                                 href={`/projects/${project.id}/chat/${chatId}`}
-                                                                className="group block rounded-lg border border-border/60 bg-card p-4 hover:bg-accent/30 hover:border-border transition-colors"
+                                                                className={`group block rounded-lg border ${palette.border} ${palette.bg} p-4 hover:brightness-105 dark:hover:brightness-125 hover:shadow-sm transition-all`}
                                                             >
                                                                 {cardInner}
                                                             </Link>
                                                         ) : (
                                                             <div
                                                                 key={cardKey}
-                                                                className="block rounded-lg border border-border/60 bg-card p-4 opacity-60"
+                                                                className={`block rounded-lg border ${palette.border} ${palette.bg} p-4 opacity-60`}
                                                             >
                                                                 {cardInner}
                                                             </div>

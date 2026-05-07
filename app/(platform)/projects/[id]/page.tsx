@@ -75,23 +75,21 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         !c.title?.startsWith("Look up Salesforce Opportu")
     );
 
-    // Detect ABM projects by name pattern. For these, surface per-account runs
-    // as cards (one card per row in `abm_runs`) instead of a flat chat list.
-    const isAbmProject = /abm/i.test(project.name || "");
-    let abmRuns: any[] = [];
-    if (isAbmProject) {
-        const { data } = await supabase
-            .from("abm_runs")
-            .select(`
-                seq, account_id, account_name, campaign_id, pushed_count,
-                started_at, completed_at, source,
-                chat:chats!inner(id, title, project_id, user_id)
-            `)
-            .eq("chat.project_id", id)
-            .eq("chat.user_id", user.id)
-            .order("started_at", { ascending: false });
-        abmRuns = data || [];
-    }
+    // Surface per-account ABM runs as cards (one card per row in `abm_runs`)
+    // for ANY project that has them — no longer gated by project name.
+    // Projects with zero abm_runs fall back to the original chat list.
+    const { data: abmRunsRaw } = await supabase
+        .from("abm_runs")
+        .select(`
+            seq, account_id, account_name, campaign_id, pushed_count,
+            started_at, completed_at, source,
+            chat:chats!inner(id, title, project_id, user_id)
+        `)
+        .eq("chat.project_id", id)
+        .eq("chat.user_id", user.id)
+        .order("started_at", { ascending: false });
+    const abmRuns: any[] = abmRunsRaw || [];
+    const isAbmProject = abmRuns.length > 0;
 
     // Fetch documents
     const { data: documents } = await supabase
