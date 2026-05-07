@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil } from "lucide-react";
+import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil, Search } from "lucide-react";
 import Link from "next/link";
 import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
@@ -32,6 +32,18 @@ interface Chat {
     created_at: string;
 }
 
+interface AbmRun {
+    seq: number;
+    account_id: string;
+    account_name: string | null;
+    campaign_id: string | null;
+    pushed_count: number | null;
+    started_at: string;
+    completed_at: string | null;
+    source: "marker" | "heuristic" | "manual";
+    chat: { id: string; title: string | null } | null;
+}
+
 interface ProjectPageClientProps {
     project: any;
     isOwner: boolean;
@@ -42,6 +54,8 @@ interface ProjectPageClientProps {
     initialMemories: any[];
     initialVersions: any[];
     initialTags: Tag[];
+    isAbmProject?: boolean;
+    initialAbmRuns?: AbmRun[];
 }
 
 export function ProjectPageClient({
@@ -54,6 +68,8 @@ export function ProjectPageClient({
     initialMemories,
     initialVersions,
     initialTags,
+    isAbmProject = false,
+    initialAbmRuns = [],
 }: ProjectPageClientProps) {
     const router = useRouter();
     const supabase = createClient();
@@ -72,6 +88,7 @@ export function ProjectPageClient({
     const [uploadingFile, setUploadingFile] = useState(false);
     const [cloning, setCloning] = useState(false);
     const [projectName, setProjectName] = useState(project.name);
+    const [runsFilter, setRunsFilter] = useState("");
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -511,36 +528,237 @@ export function ProjectPageClient({
                             </div>
                         </form>
 
-                        {/* Recent Chats List */}
-                        <div className="space-y-4 pt-4">
-                            {chats && chats.length > 0 ? (
-                                <div className="space-y-2">
-                                    {chats.map((chat) => (
-                                        <Link
-                                            key={chat.id}
-                                            href={`/projects/${project.id}/chat/${chat.id}`}
-                                            className="block w-full text-left group"
-                                        >
-                                            <div className="flex items-center gap-3 py-4 border-b border-border/50 group-hover:bg-accent/30 rounded-lg px-4 transition-all">
-                                                <MessageSquare className="h-5 w-5 text-muted-foreground flex-shrink-0" />
-                                                <div className="flex flex-col gap-1 min-w-0">
-                                                    <h3 className="font-medium text-lg group-hover:text-primary transition-colors truncate">
-                                                        {chat.title || "Untitled Conversation"}
-                                                    </h3>
-                                                    <p className="text-sm text-muted-foreground">
-                                                        {new Date(chat.created_at).toLocaleDateString()}
+                        {/* Recent Chats / ABM Runs */}
+                        {isAbmProject ? (
+                            (() => {
+                                // Chats that have at least one ABM run -- those are surfaced
+                                // as cards above. Everything else renders below as a normal list.
+                                const chatsWithRuns = new Set(
+                                    initialAbmRuns
+                                        .map((r) => r.chat?.id)
+                                        .filter((id): id is string => !!id)
+                                );
+                                const otherChats = chats.filter((c) => !chatsWithRuns.has(c.id));
+
+                                const formatDate = (iso: string) =>
+                                    new Date(iso).toLocaleString(undefined, {
+                                        month: "short",
+                                        day: "numeric",
+                                        year: "numeric",
+                                        hour: "numeric",
+                                        minute: "2-digit",
+                                    });
+
+                                const truncateCampaign = (id: string) =>
+                                    id.length > 20 ? id.slice(0, 20) + "…" : id;
+
+                                const filterTerm = runsFilter.trim().toLowerCase();
+                                const filteredRuns = filterTerm
+                                    ? initialAbmRuns.filter((r) => {
+                                          const haystack = [
+                                              r.account_name,
+                                              r.account_id,
+                                              r.campaign_id,
+                                          ]
+                                              .filter(Boolean)
+                                              .join(" ")
+                                              .toLowerCase();
+                                          return haystack.includes(filterTerm);
+                                      })
+                                    : initialAbmRuns;
+
+                                return (
+                                    <div className="space-y-8 pt-4">
+                                        {/* ABM Runs */}
+                                        <div>
+                                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                                                <h2 className="text-sm font-medium text-muted-foreground">
+                                                    ABM Runs
+                                                    {initialAbmRuns.length > 0 && (
+                                                        <span className="ml-2 text-xs text-muted-foreground/70">
+                                                            {filterTerm
+                                                                ? `(${filteredRuns.length} of ${initialAbmRuns.length})`
+                                                                : `(${initialAbmRuns.length})`}
+                                                        </span>
+                                                    )}
+                                                </h2>
+                                                {initialAbmRuns.length > 0 && (
+                                                    <div className="relative w-full sm:w-64">
+                                                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                                                        <input
+                                                            type="text"
+                                                            value={runsFilter}
+                                                            onChange={(e) => setRunsFilter(e.target.value)}
+                                                            placeholder="Search account, ID, or campaign..."
+                                                            className="w-full text-sm bg-background border border-border/60 rounded-md pl-8 pr-7 py-1.5 placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-colors"
+                                                        />
+                                                        {runsFilter && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setRunsFilter("")}
+                                                                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                                                                aria-label="Clear search"
+                                                            >
+                                                                <X className="h-3 w-3" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            {initialAbmRuns.length > 0 && filteredRuns.length === 0 ? (
+                                                <div className="text-center py-12 border border-dashed border-border/60 rounded-lg">
+                                                    <p className="text-muted-foreground text-sm">
+                                                        No runs match "{runsFilter.trim()}".
                                                     </p>
                                                 </div>
+                                            ) : initialAbmRuns.length > 0 ? (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                    {filteredRuns.map((run) => {
+                                                        const chatId = run.chat?.id;
+                                                        const cardKey = `${chatId ?? "orphan"}-${run.seq}-${run.account_id}`;
+
+                                                        const cardInner = (
+                                                            <>
+                                                                <div className="flex items-start justify-between gap-2 mb-2">
+                                                                    <span className="text-xs text-muted-foreground">
+                                                                        Run #{run.seq}
+                                                                    </span>
+                                                                </div>
+                                                                {run.account_name ? (
+                                                                    <>
+                                                                        <h3
+                                                                            className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors truncate"
+                                                                            title={run.account_name}
+                                                                        >
+                                                                            {run.account_name}
+                                                                        </h3>
+                                                                        <p
+                                                                            className="font-mono text-[11px] text-muted-foreground mt-0.5 truncate"
+                                                                            title={run.account_id}
+                                                                        >
+                                                                            {run.account_id}
+                                                                        </p>
+                                                                    </>
+                                                                ) : (
+                                                                    <h3
+                                                                        className="font-mono text-sm font-medium text-foreground group-hover:text-primary transition-colors truncate"
+                                                                        title={run.account_id}
+                                                                    >
+                                                                        {run.account_id}
+                                                                    </h3>
+                                                                )}
+                                                                <p className="text-xs text-muted-foreground mt-1">
+                                                                    {formatDate(run.started_at)}
+                                                                </p>
+                                                                {run.pushed_count != null && (
+                                                                    <p className="text-xs text-muted-foreground mt-1">
+                                                                        {run.pushed_count} {run.pushed_count === 1 ? "lead" : "leads"} pushed
+                                                                    </p>
+                                                                )}
+                                                                {run.campaign_id && (
+                                                                    <span
+                                                                        className="inline-block mt-2 text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground"
+                                                                        title={run.campaign_id}
+                                                                    >
+                                                                        {truncateCampaign(run.campaign_id)}
+                                                                    </span>
+                                                                )}
+                                                            </>
+                                                        );
+
+                                                        return chatId ? (
+                                                            <Link
+                                                                key={cardKey}
+                                                                href={`/projects/${project.id}/chat/${chatId}`}
+                                                                className="group block rounded-lg border border-border/60 bg-card p-4 hover:bg-accent/30 hover:border-border transition-colors"
+                                                            >
+                                                                {cardInner}
+                                                            </Link>
+                                                        ) : (
+                                                            <div
+                                                                key={cardKey}
+                                                                className="block rounded-lg border border-border/60 bg-card p-4 opacity-60"
+                                                            >
+                                                                {cardInner}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-12 border border-dashed border-border/60 rounded-lg">
+                                                    <p className="text-muted-foreground text-sm">
+                                                        No ABM runs yet — start one from the input above.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Other conversations (chats with no ABM runs attached) */}
+                                        {otherChats.length > 0 && (
+                                            <div>
+                                                <h2 className="text-sm font-medium text-muted-foreground mb-3">
+                                                    Other conversations
+                                                    <span className="ml-2 text-xs text-muted-foreground/70">
+                                                        ({otherChats.length})
+                                                    </span>
+                                                </h2>
+                                                <div className="space-y-2">
+                                                    {otherChats.map((chat) => (
+                                                        <Link
+                                                            key={chat.id}
+                                                            href={`/projects/${project.id}/chat/${chat.id}`}
+                                                            className="block w-full text-left group"
+                                                        >
+                                                            <div className="flex items-center gap-3 py-4 border-b border-border/50 group-hover:bg-accent/30 rounded-lg px-4 transition-all">
+                                                                <MessageSquare className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                                                                <div className="flex flex-col gap-1 min-w-0">
+                                                                    <h3 className="font-medium text-lg group-hover:text-primary transition-colors truncate">
+                                                                        {chat.title || "Untitled Conversation"}
+                                                                    </h3>
+                                                                    <p className="text-sm text-muted-foreground">
+                                                                        {new Date(chat.created_at).toLocaleDateString()}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </Link>
+                                                    ))}
+                                                </div>
                                             </div>
-                                        </Link>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="text-center py-12">
-                                    <p className="text-muted-foreground">No conversations yet.</p>
-                                </div>
-                            )}
-                        </div>
+                                        )}
+                                    </div>
+                                );
+                            })()
+                        ) : (
+                            <div className="space-y-4 pt-4">
+                                {chats && chats.length > 0 ? (
+                                    <div className="space-y-2">
+                                        {chats.map((chat) => (
+                                            <Link
+                                                key={chat.id}
+                                                href={`/projects/${project.id}/chat/${chat.id}`}
+                                                className="block w-full text-left group"
+                                            >
+                                                <div className="flex items-center gap-3 py-4 border-b border-border/50 group-hover:bg-accent/30 rounded-lg px-4 transition-all">
+                                                    <MessageSquare className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                                                    <div className="flex flex-col gap-1 min-w-0">
+                                                        <h3 className="font-medium text-lg group-hover:text-primary transition-colors truncate">
+                                                            {chat.title || "Untitled Conversation"}
+                                                        </h3>
+                                                        <p className="text-sm text-muted-foreground">
+                                                            {new Date(chat.created_at).toLocaleDateString()}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </Link>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-12">
+                                        <p className="text-muted-foreground">No conversations yet.</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
 
