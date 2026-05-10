@@ -48,6 +48,7 @@ interface AbmRun {
 // + 700/300 split text so it reads cleanly in both light and dark themes.
 // Cards are coloured by a hash of account_id so the same account always gets
 // the same hue (visual continuity across multiple runs of the same account).
+// (palette is intentionally narrow; see ABM_CARD_PALETTE.length cap below)
 const ABM_CARD_PALETTE = [
     { bg: "bg-sky-500/10",     border: "border-sky-500/30",     accent: "text-sky-700 dark:text-sky-300" },
     { bg: "bg-emerald-500/10", border: "border-emerald-500/30", accent: "text-emerald-700 dark:text-emerald-300" },
