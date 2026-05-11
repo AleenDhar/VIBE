@@ -668,11 +668,26 @@ export function ProjectPageClient({
                                                         const cardKey = `${chatId ?? "orphan"}-${run.seq}-${run.account_id}`;
                                                         const palette = pickAbmCardPalette(run.account_id);
 
+                                                        // Status pill: Completed > Unknown (heuristic backfill) > Running.
+                                                        // Unknown is for backfilled rows where completion was never confirmed.
+                                                        let statusLabel = "Running";
+                                                        let statusPillClass = "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30";
+                                                        if (run.completed_at) {
+                                                            statusLabel = "Completed";
+                                                            statusPillClass = "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30";
+                                                        } else if (run.source === "heuristic") {
+                                                            statusLabel = "Unknown";
+                                                            statusPillClass = "bg-muted text-muted-foreground border-border";
+                                                        }
+
                                                         const cardInner = (
                                                             <>
                                                                 <div className="flex items-start justify-between gap-2 mb-2">
                                                                     <span className={`text-xs font-medium ${palette.accent}`}>
                                                                         Run #{run.seq}
+                                                                    </span>
+                                                                    <span className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border ${statusPillClass}`}>
+                                                                        {statusLabel}
                                                                     </span>
                                                                 </div>
                                                                 {run.account_name ? (

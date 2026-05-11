@@ -78,27 +78,32 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     // Surface per-account ABM runs as cards (one card per row in `abm_runs`)
     // for ANY project that has them — no longer gated by project name.
     // Projects with zero abm_runs fall back to the original chat list.
-    const { data: abmRunsRaw } = await supabase
+    //
+    // Role-based scoping:
+    //   - admin / super_admin → project-wide view (see all team activity)
+    //   - normal users        → only chats they own
+    let abmQuery = supabase
         .from("abm_runs")
         .select(`
             seq, account_id, account_name, campaign_id, pushed_count,
             started_at, completed_at, source,
             chat:chats!inner(id, title, project_id, user_id)
         `)
-        .eq("chat.project_id", id)
-        .eq("chat.user_id", user.id)
-        .order("started_at", { ascending: false });
+        .eq("chat.project_id", id);
+    if (!isAdmin) {
+        abmQuery = abmQuery.eq("chat.user_id", user.id);
+    }
+    const { data: abmRunsRaw } = await abmQuery.order("started_at", { ascending: false });
     const abmRuns: any[] = abmRunsRaw || [];
     const isAbmProject = abmRuns.length > 0;
 
     // Surface Opportunity Diagnosis runs as cards for any project that has
     // rows in lake.opportunity_diagnoses. Data-driven detection same as ABM.
     //
-    // Scoping: project-wide, not user-wide. The lake exists so reps can see
-    // prior context for an account regardless of who ran the original
-    // diagnosis (a rep taking over a colleague's account needs to see what
-    // was found previously). Project access is gated above via `hasAccess`.
-    const { data: diagnosesRaw } = await supabase
+    // Role-based scoping (same as ABM):
+    //   - admin / super_admin → project-wide
+    //   - normal users        → only diagnoses tied to chats they own
+    let odQuery = supabase
         .schema("lake")
         .from("opportunity_diagnoses")
         .select(`
@@ -110,8 +115,17 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             top_risks, recommendations, key_themes,
             meeting_count_30d, last_meeting_date
         `)
-        .eq("project_id", id)
-        .order("run_at", { ascending: false });
+        .eq("project_id", id);
+    if (!isAdmin) {
+        const userChatIds = filteredChats.map(c => c.id);
+        if (userChatIds.length === 0) {
+            // Short-circuit: user has no chats in this project → no diagnoses for them.
+            odQuery = odQuery.eq("chat_id", "__none__");
+        } else {
+            odQuery = odQuery.in("chat_id", userChatIds);
+        }
+    }
+    const { data: diagnosesRaw } = await odQuery.order("run_at", { ascending: false });
     const opportunityDiagnoses: any[] = diagnosesRaw || [];
     const isDiagnosisProject = !isAbmProject && opportunityDiagnoses.length > 0;
 
