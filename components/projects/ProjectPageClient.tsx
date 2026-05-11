@@ -44,6 +44,26 @@ interface AbmRun {
     chat: { id: string; title: string | null } | null;
 }
 
+interface Diagnosis {
+    chat_id: string;
+    run_at: string;
+    account_id: string | null;
+    account_name: string | null;
+    opportunity_id: string | null;
+    opportunity_name: string | null;
+    stage: string | null;
+    amount: number | null;
+    close_date: string | null;
+    owner_name: string | null;
+    momentum_verdict: "accelerating" | "stalling" | "drifting" | null;
+    health_rating: "high" | "medium" | "low" | null;
+    top_risks: any;
+    recommendations: any;
+    key_themes: any;
+    meeting_count_30d: number | null;
+    last_meeting_date: string | null;
+}
+
 // Light, friendly card palette. Each entry uses /10 background + /30 border
 // + 700/300 split text so it reads cleanly in both light and dark themes.
 // Cards are coloured by a hash of account_id so the same account always gets
@@ -82,6 +102,8 @@ interface ProjectPageClientProps {
     initialTags: Tag[];
     isAbmProject?: boolean;
     initialAbmRuns?: AbmRun[];
+    isDiagnosisProject?: boolean;
+    initialDiagnoses?: Diagnosis[];
 }
 
 export function ProjectPageClient({
@@ -96,6 +118,8 @@ export function ProjectPageClient({
     initialTags,
     isAbmProject = false,
     initialAbmRuns = [],
+    isDiagnosisProject = false,
+    initialDiagnoses = [],
 }: ProjectPageClientProps) {
     const router = useRouter();
     const supabase = createClient();
@@ -721,6 +745,206 @@ export function ProjectPageClient({
                                         </div>
 
                                         {/* Other conversations (chats with no ABM runs attached) */}
+                                        {otherChats.length > 0 && (
+                                            <div>
+                                                <h2 className="text-sm font-medium text-muted-foreground mb-3">
+                                                    Other conversations
+                                                    <span className="ml-2 text-xs text-muted-foreground/70">
+                                                        ({otherChats.length})
+                                                    </span>
+                                                </h2>
+                                                <div className="space-y-2">
+                                                    {otherChats.map((chat) => (
+                                                        <Link
+                                                            key={chat.id}
+                                                            href={`/projects/${project.id}/chat/${chat.id}`}
+                                                            className="block w-full text-left group"
+                                                        >
+                                                            <div className="flex items-center gap-3 py-4 border-b border-border/50 group-hover:bg-accent/30 rounded-lg px-4 transition-all">
+                                                                <MessageSquare className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                                                                <div className="flex flex-col gap-1 min-w-0">
+                                                                    <h3 className="font-medium text-lg group-hover:text-primary transition-colors truncate">
+                                                                        {chat.title || "Untitled Conversation"}
+                                                                    </h3>
+                                                                    <p className="text-sm text-muted-foreground">
+                                                                        {new Date(chat.created_at).toLocaleDateString()}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </Link>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()
+                        ) : isDiagnosisProject ? (
+                            (() => {
+                                // Mirror the ABM-cards pattern for Opportunity Diagnosis projects.
+                                // One card per row in lake.opportunity_diagnoses, ordered newest first.
+                                const formatDate = (iso: string) =>
+                                    new Date(iso).toLocaleString(undefined, {
+                                        month: "short",
+                                        day: "numeric",
+                                        year: "numeric",
+                                        hour: "numeric",
+                                        minute: "2-digit",
+                                    });
+
+                                // Pill class for momentum_verdict and health_rating. Same colour
+                                // semantics across both: emerald = good, amber = neutral, rose = bad.
+                                const pillFor = (value: string | null): string => {
+                                    if (value === "accelerating" || value === "high") {
+                                        return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30";
+                                    }
+                                    if (value === "drifting" || value === "medium") {
+                                        return "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30";
+                                    }
+                                    if (value === "stalling" || value === "low") {
+                                        return "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30";
+                                    }
+                                    return "bg-muted text-muted-foreground border-border";
+                                };
+
+                                const filterTerm = runsFilter.trim().toLowerCase();
+                                const filteredDiagnoses = filterTerm
+                                    ? initialDiagnoses.filter((d) => {
+                                          const haystack = [
+                                              d.account_name,
+                                              d.account_id,
+                                              d.opportunity_name,
+                                              d.opportunity_id,
+                                              d.stage,
+                                              d.owner_name,
+                                          ]
+                                              .filter(Boolean)
+                                              .join(" ")
+                                              .toLowerCase();
+                                          return haystack.includes(filterTerm);
+                                      })
+                                    : initialDiagnoses;
+
+                                // Chats that have at least one diagnosis row -- surfaced as cards above.
+                                // Everything else renders below as the regular chat list.
+                                const chatsWithDiagnoses = new Set(
+                                    initialDiagnoses.map((d) => d.chat_id)
+                                );
+                                const otherChats = chats.filter((c) => !chatsWithDiagnoses.has(c.id));
+
+                                return (
+                                    <div className="space-y-8 pt-4">
+                                        <div>
+                                            <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                                                <h2 className="text-sm font-medium text-muted-foreground">
+                                                    Opportunity Diagnoses
+                                                    {initialDiagnoses.length > 0 && (
+                                                        <span className="ml-2 text-xs text-muted-foreground/70">
+                                                            {filterTerm
+                                                                ? `(${filteredDiagnoses.length} of ${initialDiagnoses.length})`
+                                                                : `(${initialDiagnoses.length})`}
+                                                        </span>
+                                                    )}
+                                                </h2>
+                                                {initialDiagnoses.length > 0 && (
+                                                    <div className="relative w-full sm:w-64">
+                                                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                                                        <input
+                                                            type="text"
+                                                            value={runsFilter}
+                                                            onChange={(e) => setRunsFilter(e.target.value)}
+                                                            placeholder="Search account, opp, stage..."
+                                                            className="w-full text-sm bg-background border border-border/60 rounded-md pl-8 pr-7 py-1.5 placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-colors"
+                                                        />
+                                                        {runsFilter && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setRunsFilter("")}
+                                                                className="absolute right-1.5 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                                                                aria-label="Clear search"
+                                                            >
+                                                                <X className="h-3 w-3" />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            {filteredDiagnoses.length === 0 ? (
+                                                <div className="text-center py-12 border border-dashed border-border/60 rounded-lg">
+                                                    <p className="text-muted-foreground text-sm">
+                                                        No diagnoses match "{runsFilter.trim()}".
+                                                    </p>
+                                                </div>
+                                            ) : (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                    {filteredDiagnoses.map((d) => {
+                                                        const cardKey = `${d.chat_id}-${d.run_at}`;
+                                                        const seedForPalette = d.account_id || d.opportunity_id || d.chat_id;
+                                                        const palette = pickAbmCardPalette(seedForPalette);
+
+                                                        // Heading priority: account_name > account_id > opportunity_name >
+                                                        // generic literal. The opp_name fallback matters because some chats
+                                                        // resolved opp data but never did a SOQL Account lookup, so account_*
+                                                        // is null while opportunity_name is populated.
+                                                        const heading =
+                                                            d.account_name ||
+                                                            d.account_id ||
+                                                            d.opportunity_name ||
+                                                            "Opportunity Diagnosis";
+                                                        const showRawIdSubtitle = !!d.account_name && !!d.account_id;
+                                                        // Don't repeat the heading line as a subtitle when opp_name was used as the heading.
+                                                        const showOppSubtitle = !!d.opportunity_name && d.opportunity_name !== heading;
+
+                                                        return (
+                                                            <Link
+                                                                key={cardKey}
+                                                                href={`/projects/${project.id}/chat/${d.chat_id}`}
+                                                                className={`group block rounded-lg border ${palette.border} ${palette.bg} p-4 hover:brightness-105 dark:hover:brightness-125 hover:shadow-sm transition-all`}
+                                                            >
+                                                                <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                                                    {d.momentum_verdict && (
+                                                                        <span className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border ${pillFor(d.momentum_verdict)}`}>
+                                                                            {d.momentum_verdict}
+                                                                        </span>
+                                                                    )}
+                                                                    {d.health_rating && (
+                                                                        <span className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border ${pillFor(d.health_rating)}`}>
+                                                                            health: {d.health_rating}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <h3
+                                                                    className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors truncate"
+                                                                    title={heading}
+                                                                >
+                                                                    {heading}
+                                                                </h3>
+                                                                {showRawIdSubtitle && (
+                                                                    <p className="font-mono text-[11px] text-muted-foreground mt-0.5 truncate" title={d.account_id ?? undefined}>
+                                                                        {d.account_id}
+                                                                    </p>
+                                                                )}
+                                                                {showOppSubtitle && (
+                                                                    <p className="text-xs text-muted-foreground mt-1 truncate" title={d.opportunity_name ?? undefined}>
+                                                                        {d.opportunity_name}
+                                                                    </p>
+                                                                )}
+                                                                {d.stage && (
+                                                                    <p className="text-[11px] text-muted-foreground/80 mt-1 truncate">
+                                                                        {d.stage}
+                                                                    </p>
+                                                                )}
+                                                                <p className="text-xs text-muted-foreground mt-2">
+                                                                    {formatDate(d.run_at)}
+                                                                </p>
+                                                            </Link>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+
                                         {otherChats.length > 0 && (
                                             <div>
                                                 <h2 className="text-sm font-medium text-muted-foreground mb-3">

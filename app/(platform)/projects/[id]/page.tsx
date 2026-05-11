@@ -91,6 +91,30 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     const abmRuns: any[] = abmRunsRaw || [];
     const isAbmProject = abmRuns.length > 0;
 
+    // Surface Opportunity Diagnosis runs as cards for any project that has
+    // rows in lake.opportunity_diagnoses. Data-driven detection same as ABM.
+    //
+    // Scoping: project-wide, not user-wide. The lake exists so reps can see
+    // prior context for an account regardless of who ran the original
+    // diagnosis (a rep taking over a colleague's account needs to see what
+    // was found previously). Project access is gated above via `hasAccess`.
+    const { data: diagnosesRaw } = await supabase
+        .schema("lake")
+        .from("opportunity_diagnoses")
+        .select(`
+            chat_id, run_at,
+            account_id, account_name,
+            opportunity_id, opportunity_name,
+            stage, amount, close_date, owner_name,
+            momentum_verdict, health_rating,
+            top_risks, recommendations, key_themes,
+            meeting_count_30d, last_meeting_date
+        `)
+        .eq("project_id", id)
+        .order("run_at", { ascending: false });
+    const opportunityDiagnoses: any[] = diagnosesRaw || [];
+    const isDiagnosisProject = !isAbmProject && opportunityDiagnoses.length > 0;
+
     // Fetch documents
     const { data: documents } = await supabase
         .from("documents")
@@ -139,6 +163,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             initialTags={projectTags}
             isAbmProject={isAbmProject}
             initialAbmRuns={abmRuns}
+            isDiagnosisProject={isDiagnosisProject}
+            initialDiagnoses={opportunityDiagnoses}
         />
     );
 }
