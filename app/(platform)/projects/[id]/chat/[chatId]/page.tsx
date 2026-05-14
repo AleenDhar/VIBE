@@ -36,11 +36,12 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     if (!chat) notFound();
 
-    // Fetch messages
+    // Fetch messages — order by sequence (server contract); created_at as tiebreaker.
     const { data: messages } = await supabase
         .from("chat_messages")
         .select("*")
         .eq("chat_id", chatId)
+        .order("sequence", { ascending: true })
         .order("created_at", { ascending: true });
 
     return (
