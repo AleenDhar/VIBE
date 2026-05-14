@@ -140,11 +140,23 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         // ─────────────────────────────────────────────────────────────────
 
         if (msg.role === 'user') {
+            // verifier_remediation is a server-written user-role row that should render
+            // as a left-aligned "system follow-up" bubble. Pass the type through so the
+            // JSX layer can branch on it; metadata is preserved by the spread.
             acc.push({ ...msg, images: meta.images || msg.images || [] });
         } else if (msg.role === 'assistant') {
             const lastMsg = acc[acc.length - 1];
 
-            if (type === 'thinking' || type === 'tool_call' || type === 'tool_result') {
+            if (type === 'verifier_report') {
+                // Standalone verdict bubble — never merge into the previous assistant message.
+                acc.push({
+                    ...msg,
+                    metadata: meta,
+                    thinkingSteps: [],
+                    isProcessing: false,
+                    content: msg.content || "",
+                });
+            } else if (type === 'thinking' || type === 'tool_call' || type === 'tool_result') {
                 if (lastMsg && lastMsg.role === 'assistant') {
                     if (type === 'thinking') {
                         lastMsg.thinkingSteps = [...(lastMsg.thinkingSteps || []), {
@@ -207,6 +219,17 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         content: msg.content || ""
                     });
                 }
+            } else {
+                // Unknown type — render as a plain content bubble rather than silently dropping it.
+                // Prevents future server-side message types from disappearing without warning.
+                console.warn(`[ChatInterface] Unknown assistant message type "${type}" — rendering as generic bubble`);
+                acc.push({
+                    ...msg,
+                    metadata: meta,
+                    thinkingSteps: [],
+                    isProcessing: false,
+                    content: msg.content || "",
+                });
             }
         }
         return acc;
@@ -421,10 +444,41 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         const lastMsgIndex = newMessages.length - 1;
                         const lastMsg = newMessages[lastMsgIndex];
 
-                        // 1. Skip User Messages - they are added optimistically on send
+                        // 1. Handle user-role rows.
+                        //    - Real user messages (type='message' or unset) are already added
+                        //      optimistically by handleSend, so skip them.
+                        //    - verifier_remediation is server-written with role='user' and must
+                        //      be appended. After it, push a fresh assistant placeholder so the
+                        //      remediation re-run's thinking/tool_call/tool_result rows attach
+                        //      to a NEW bubble instead of mutating the verifier_report above.
                         if (newMsg.role === 'user') {
-                            console.log('[Realtime] Ignoring user message from DB (already added optimistically)');
-                            return prev;
+                            const userType = newMsg.type || 'message';
+
+                            if (userType === 'message') {
+                                console.log('[Realtime] Ignoring user message from DB (already added optimistically)');
+                                return prev;
+                            }
+
+                            if (userType === 'verifier_remediation') {
+                                if (prev.some(m => m.id === newMsg.id)) return prev; // idempotent
+                                console.log('[Realtime] Appending verifier_remediation + assistant placeholder');
+                                return [
+                                    ...prev,
+                                    { ...newMsg, images: [] },
+                                    {
+                                        id: `placeholder-${newMsg.id}`,
+                                        role: 'assistant',
+                                        content: '',
+                                        thinkingSteps: [],
+                                        isProcessing: true,
+                                    },
+                                ];
+                            }
+
+                            // Unknown user-role type — append rather than silently drop.
+                            console.warn(`[Realtime] Unknown user-role type "${userType}" — appending generically`);
+                            if (prev.some(m => m.id === newMsg.id)) return prev;
+                            return [...prev, { ...newMsg, images: [] }];
                         }
 
                         // 2. Handle Assistant Messages - Update UI when DB is updated
@@ -504,6 +558,30 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         isProcessing: false
                                     };
                                 });
+                            } else if (messageType === 'verifier_report') {
+                                // Verdict bubble — never overwrite the previous assistant message.
+                                if (prev.some(m => m.id === newMsg.id)) return prev; // idempotent
+                                const rtMeta = typeof newMsg.metadata === 'string'
+                                    ? (() => { try { return JSON.parse(newMsg.metadata) || {}; } catch { return {}; } })()
+                                    : (newMsg.metadata || {});
+                                console.log('[Realtime] Appending verifier_report bubble', { passed: rtMeta.passed });
+                                return [...prev, {
+                                    ...newMsg,
+                                    metadata: rtMeta,
+                                    thinkingSteps: [],
+                                    isProcessing: false,
+                                }];
+                            } else if (messageType !== 'final' && messageType !== 'message') {
+                                // Unknown assistant type — append as a new bubble instead of
+                                // falling into the findLastAssistantIndex → overwrite block below
+                                // (which is the trap that originally broke verifier_report).
+                                console.warn(`[Realtime] Unknown assistant type "${messageType}" — appending generically`);
+                                if (prev.some(m => m.id === newMsg.id)) return prev;
+                                return [...prev, {
+                                    ...newMsg,
+                                    thinkingSteps: [],
+                                    isProcessing: false,
+                                }];
                             }
 
                             // Check if existing message matches ID
@@ -1177,7 +1255,76 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         }
                         return true;
                     })
-                    .map((msg, i) => (
+                    .map((msg, i) => {
+                        const msgType = msg.type || 'message';
+
+                        // verifier_report: standalone verdict bubble (passed = green, failed = amber)
+                        if (msgType === 'verifier_report') {
+                            const vmeta = (typeof msg.metadata === 'string'
+                                ? (() => { try { return JSON.parse(msg.metadata) || {}; } catch { return {}; } })()
+                                : (msg.metadata || {})) as any;
+                            const passed = vmeta.passed === true;
+                            const missed: string[] = Array.isArray(vmeta.missed_ids) ? vmeta.missed_ids : [];
+                            const pillBase = "inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium border";
+                            const pillCls = passed
+                                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                                : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30";
+                            const headline = passed
+                                ? `✅ Verifier passed${typeof vmeta.total_tool_calls === 'number' ? ` · ${vmeta.total_tool_calls} tool calls` : ''}`
+                                : (msg.content || vmeta.summary || '⚠️ Verifier flagged issues');
+                            return (
+                                <div key={i} className="flex gap-4 mx-auto w-full max-w-3xl justify-start">
+                                    <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
+                                        <Bot className="h-5 w-5" />
+                                    </div>
+                                    <div className="flex flex-col gap-2 max-w-[85%] md:max-w-[80%] min-w-0 items-start">
+                                        <span className={`${pillBase} ${pillCls}`}>{headline}</span>
+                                        {!passed && missed.length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {missed.map((mid, idx) => (
+                                                    <span key={idx} className="inline-block rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground border border-border/60">
+                                                        {mid}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {!passed && vmeta.detail && (
+                                            <details className="w-full mt-1 rounded-md border border-border/60 bg-muted/30">
+                                                <summary className="cursor-pointer select-none px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+                                                    View verifier details
+                                                </summary>
+                                                <div className="px-3 pb-2 pt-1">
+                                                    <MarkdownContent content={String(vmeta.detail)} compact />
+                                                </div>
+                                            </details>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        }
+
+                        // verifier_remediation: server-written user-role row; render as
+                        // left-aligned "system follow-up" bubble (visually distinct from a
+                        // user-typed message even though role='user').
+                        if (msgType === 'verifier_remediation') {
+                            return (
+                                <div key={i} className="flex gap-4 mx-auto w-full max-w-3xl justify-start">
+                                    <div className="h-8 w-8 rounded-full bg-muted border flex items-center justify-center text-muted-foreground flex-shrink-0 mt-1 shadow-sm">
+                                        <RotateCcw className="h-4 w-4" />
+                                    </div>
+                                    <div className="flex flex-col gap-1 max-w-[85%] md:max-w-[80%] min-w-0 items-start">
+                                        <span className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                                            System follow-up
+                                        </span>
+                                        <div className="rounded-2xl rounded-tl-sm border border-dashed border-muted-foreground/30 bg-muted/40 px-4 py-2.5 text-sm text-foreground/85 italic whitespace-pre-wrap break-words">
+                                            {msg.content || ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        }
+
+                        return (
                         <div key={i} className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                             {msg.role === 'assistant' && (
                                 <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
@@ -1439,7 +1586,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 })()}
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
 
                 {/* Global "Thinking..." indicator - only show if we don't have a visible assistant message yet */}
                 {loading && (() => {
