@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Loader2, Trash2, Plus, CheckCircle2, FileText, RefreshCw } from "lucide-react";
+import { Loader2, Trash2, Plus, CheckCircle2, FileText, RefreshCw, Download } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { extractFileContent } from "@/lib/extract-file-content";
 
@@ -24,6 +24,7 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
     const [uploadStatus, setUploadStatus] = useState("");
     const [indexingId, setIndexingId] = useState<string | null>(null);
     const [reindexingAll, setReindexingAll] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -94,6 +95,42 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
         } catch (error: any) {
             console.error("Delete failed:", error);
             alert("Delete failed: " + error.message);
+        }
+    };
+
+    const handleDownload = async (doc: any) => {
+        setDownloadingId(doc.id);
+        const supabase = createClient();
+
+        try {
+            // Signed URL with `download` flag — Supabase sets a
+            // Content-Disposition: attachment header with the original
+            // filename, so the browser saves the file instead of trying
+            // to render it inline. 60-second TTL is plenty for a click.
+            const { data, error } = await supabase.storage
+                .from("project-files")
+                .createSignedUrl(doc.file_path, 60, { download: doc.name });
+
+            if (error || !data?.signedUrl) {
+                throw error || new Error("Could not generate download link");
+            }
+
+            // Trigger the download. Using a temporary anchor (rather than
+            // window.location.assign) keeps the user on the project page.
+            const a = document.createElement("a");
+            a.href = data.signedUrl;
+            a.download = doc.name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } catch (error: any) {
+            console.error("Download failed:", error);
+            alert(
+                "Couldn't download this file. It may have been removed from storage. " +
+                (error?.message ? `(${error.message})` : "")
+            );
+        } finally {
+            setDownloadingId(null);
         }
     };
 
@@ -263,6 +300,21 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
                                             </button>
                                         )
                                     )}
+                                    {/* Download — visible to anyone with project access */}
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDownload(doc)}
+                                        disabled={downloadingId === doc.id}
+                                        title={`Download ${doc.name}`}
+                                        aria-label={`Download ${doc.name}`}
+                                        className="ml-auto flex items-center justify-center h-6 w-6 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                                    >
+                                        {downloadingId === doc.id ? (
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                            <Download className="h-3.5 w-3.5" />
+                                        )}
+                                    </button>
                                 </div>
                             </div>
                         );
