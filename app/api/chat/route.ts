@@ -1,8 +1,13 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateEmbeddings } from "@/lib/rag-utils";
 import { computeTodaySpend } from "@/lib/spend-check";
+import {
+    buildPipelineContext,
+    runPhasePipeline,
+    validatePhaseModels,
+    type Phase,
+} from "@/lib/phase-pipeline";
 
 export const dynamic = 'force-dynamic';
 
@@ -227,101 +232,45 @@ Please use this context to personalize your responses.`;
             });
         }
 
-        // 3. Get Project System Prompt & Memories (only if chat belongs to a project)
+        // ── Phase pipeline preload ─────────────────────────────────────
+        // If this chat's project has any enabled phases, the request runs as a
+        // sequential pipeline (loaded below). When phases exist, projects
+        // .system_prompt is treated as superseded (the first phase is seeded
+        // from it on creation) and is NOT appended to the system prompt.
+        let projectPhases: Array<{
+            id: string;
+            name: string | null;
+            position: number;
+            model_id: string | null;
+            system_prompt: string;
+            enabled: boolean;
+        }> = [];
         if (finalProjectId) {
-            // 4b. Get Project Documents via Vector Search (RAG)
-            try {
-                // 4. Get Project Memories FIRST — these are the highest-priority context
-                const { data: memories } = await supabase
-                    .from("project_memories")
-                    .select("memory_type, content, sentiment, importance")
-                    .eq("project_id", finalProjectId)
-                    .order("importance", { ascending: false })
-                    .limit(20);
-
-                if (memories && memories.length > 0) {
-                    const memoryContext = memories.map(m =>
-                        `[${m.memory_type.toUpperCase()}] ${m.content} (Importance: ${m.importance}/10)`
-                    ).join("\n");
-                    systemPrompt += `\n\n## HIGHEST-PRIORITY CONTEXT — Project Memory\nThe following are authoritative memories for this project, captured from prior conversations and user input. They represent established facts, preferences, and rules specific to this project.\n\nYou MUST treat these as the top-priority context for every response:\n- Apply them proactively whenever relevant, without being asked.\n- They override general guidance, default behavior, and any conflicting assumptions.\n- Higher Importance scores indicate stronger precedence.\n- If a user request conflicts with a memory, surface the conflict and defer to the memory unless the user explicitly overrides it.\n\n${memoryContext}`;
-                }
-
-                const { data: project } = await supabase
-                    .from("projects")
-                    .select("system_prompt")
-                    .eq("id", finalProjectId)
-                    .single();
-
-                if (project?.system_prompt) {
-                    systemPrompt += `\n\n## Project Context\n${project.system_prompt}`;
-                }
-
-                // Generate an embedding for the user's latest message
-                const queryEmbedding = await generateEmbeddings([content], apiKeys["openai_api_key"]);
-
-                if (queryEmbedding && queryEmbedding.length > 0) {
-                    // Call Supabase RPC function to get relevant chunks
-                    const { data: relevantChunks, error: rpcError } = await supabase.rpc(
-                        "match_document_chunks",
-                        {
-                            query_embedding: queryEmbedding[0],
-                            match_project_id: finalProjectId,
-                            match_threshold: 0.3, // Lower bound similarity (0.0 to 1.0)
-                            match_count: 5        // Max number of chunks to inject
-                        }
-                    );
-
-                    if (rpcError) throw rpcError;
-
-                    if (relevantChunks && relevantChunks.length > 0) {
-                        const docsContext = relevantChunks
-                            .map((chunk: any) => `[Excerpt]:\n${chunk.content}`)
-                            .join("\n\n---\n\n");
-
-                        systemPrompt += `\n\n## Relevant Document Excerpts\nBased on the user's latest message, here are the most relevant excerpts from the project's attached files. Use these to answer the user's questions definitively:\n\n${docsContext}`;
-                    } else {
-                        // Let the agent know files exist but nothing specific matched
-                        const { data: documents } = await supabase
-                            .from("documents")
-                            .select("name")
-                            .eq("project_id", finalProjectId);
-
-                        if (documents && documents.length > 0) {
-                            const fileNames = documents.map(d => d.name).join(", ");
-                            systemPrompt += `\n\n## Attached Project Files\nThere are ${documents.length} files attached to this project: ${fileNames}. The initial semantic search did not find highly relevant excerpts for the user's current query, but the full contents are still available.\n\nIMPORTANT: You have access to these files through the search_knowledge tool. If the user asks you to read, summarize, or reference any of these files, use the search_knowledge tool to retrieve their contents. Do NOT attempt to access files via local filesystem commands like ls, cat, or any shell tools — the files are stored in a remote database, not on your local filesystem.`;
-                        }
-                    }
-                }
-            } catch (ragError) {
-                console.error("RAG Document Search Failed:", ragError);
-                // Fallback or just ignore error and continue without docs
-            }
+            const { data: phaseRows } = await supabase
+                .from("project_phases")
+                .select("id, name, position, model_id, system_prompt, enabled")
+                .eq("project_id", finalProjectId)
+                .eq("enabled", true)
+                .order("position", { ascending: true });
+            projectPhases = phaseRows || [];
         }
+        const phaseMode = projectPhases.length > 0;
 
-        // Get Agent Behavioral Instructions (Global + Project Specific)
-        let instructionsQuery = supabase
-            .from("agent_instructions")
-            .select("instruction")
-            .eq("user_id", user.id)
-            .eq("is_active", true);
-
+        // Build the shared system prompt prefix (memories + RAG + behavioral
+        // instructions, plus legacy projects.system_prompt when no phases).
+        // Extracted into lib/phase-pipeline.ts so the automation runner can
+        // assemble the exact same context for batch runs.
         if (finalProjectId) {
-            // Fetch instructions specifically for this project OR those with no project (global)
-            instructionsQuery = instructionsQuery.or(`project_id.eq.${finalProjectId},project_id.is.null`);
-        } else {
-            // Global only
-            instructionsQuery = instructionsQuery.is("project_id", null);
+            systemPrompt = await buildPipelineContext({
+                supabase,
+                projectId: finalProjectId,
+                userId: user.id,
+                latestUserContent: content,
+                apiKeys,
+                initialPrompt: systemPrompt,
+                includeLegacyProjectPrompt: !phaseMode,
+            });
         }
-
-        const { data: instructions } = await instructionsQuery
-            .order("created_at", { ascending: false });
-
-        if (instructions && instructions.length > 0) {
-            const instructionsContext = instructions.map(i => `- ${i.instruction}`).join("\n");
-            systemPrompt += `\n\n## Behavioral Instructions\nThe following are specific instructions and behavioral rules you MUST follow in this conversation, based on previous interactions:\n${instructionsContext}`;
-        }
-
-        // API keys fetching has been moved up to support RAG in the project block
 
         // 6. Build Payload
         const messagesPayload = previousMessages ? previousMessages.map((m: any) => ({
@@ -336,32 +285,102 @@ Please use this context to personalize your responses.`;
         }
         messagesPayload.push(currentUserMsg);
 
-        const payload = {
-            messages: messagesPayload,
-            system_prompt: systemPrompt,
-            model: finalModel, // Enforced model from Permission Checks
-            stream: true,
-            chat_id: chatId, // Pass chat_id so server can log directly to DB
-            project_id: finalProjectId,
-            api_keys: apiKeys
-            // enable_research: true // Optional: could be passed from client if needed
-        };
+        // ── Single-call path (no phases configured) ────────────────────
+        if (!phaseMode) {
+            const payload = {
+                messages: messagesPayload,
+                system_prompt: systemPrompt,
+                model: finalModel, // Enforced model from Permission Checks
+                stream: true,
+                chat_id: chatId, // Pass chat_id so server can log directly to DB
+                project_id: finalProjectId,
+                api_keys: apiKeys
+                // enable_research: true // Optional: could be passed from client if needed
+            };
 
-        // 6. Call Python Server (Async Mode)
-        console.log(`[API] Forwarding to Agent Server: ${agentApiUrl}`);
-        const response = await fetch(agentApiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-        });
+            console.log(`[API] Forwarding to Agent Server: ${agentApiUrl}`);
+            const response = await fetch(agentApiUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Agent Server Error: ${response.status} - ${errorText}`);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Agent Server Error: ${response.status} - ${errorText}`);
+            }
+
+            return new NextResponse(response.body, {
+                headers: {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                },
+            });
         }
 
-        // Return the raw stream to keep the connection open
-        return new NextResponse(response.body, {
+        // ── Phase pipeline path ────────────────────────────────────────
+        // Delegates to lib/phase-pipeline.ts. Same module powers the
+        // automation runner so chat and batch executions share an identical
+        // pipeline.
+        const validation = await validatePhaseModels(supabase, projectPhases as Phase[], allowedModels);
+        if (validation.ok === false) {
+            return NextResponse.json({ error: validation.error }, { status: validation.status });
+        }
+
+        const encoder = new TextEncoder();
+        const sseEvent = (obj: unknown) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
+
+        const stream = new ReadableStream({
+            async start(controller) {
+                try {
+                    const result = await runPhasePipeline(
+                        {
+                            supabase,
+                            chatId,
+                            projectId: finalProjectId!,
+                            sharedSystemPrefix: systemPrompt,
+                            messagesPayload,
+                            phases: projectPhases as Phase[],
+                            apiKeys,
+                            agentApiUrl,
+                        },
+                        {
+                            onPhaseStart: (phase) => {
+                                controller.enqueue(sseEvent({ type: "phase_start", phase }));
+                            },
+                            onPhaseChunk: (bytes) => {
+                                controller.enqueue(bytes);
+                            },
+                            onPhaseEnd: (phase) => {
+                                controller.enqueue(sseEvent({ type: "phase_end", phase }));
+                            },
+                            onError: (message) => {
+                                controller.enqueue(sseEvent({ type: "error", content: message }));
+                            },
+                        }
+                    );
+                    if (result.failed && result.error) {
+                        // onError already enqueued — nothing extra to do.
+                    }
+                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                    controller.close();
+                } catch (err: any) {
+                    console.error("[API] Phase pipeline error:", err);
+                    try {
+                        controller.enqueue(sseEvent({ type: "error", content: err?.message || "Pipeline error" }));
+                    } catch {}
+                    controller.close();
+                }
+            },
+            cancel() {
+                // Client disconnected — pipeline can't be cancelled mid-phase
+                // from here; it'll finish the in-flight phase and exit on the
+                // next loop iteration's broken enqueue.
+            },
+        });
+
+        return new NextResponse(stream, {
             headers: {
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache',

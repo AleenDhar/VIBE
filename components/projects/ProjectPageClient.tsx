@@ -6,6 +6,10 @@ import { Button } from "@/components/ui/Button";
 import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil, Search } from "lucide-react";
 import Link from "next/link";
 import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
+import { PhasesCard } from "@/components/projects/PhasesCard";
+import { AutomationsCard } from "@/components/projects/AutomationsCard";
+import type { ProjectPhase } from "@/lib/actions/phases";
+import type { ProjectAutomation } from "@/lib/actions/automations";
 import { ProjectFiles } from "@/components/projects/ProjectFiles";
 import { MemoryManager } from "@/components/projects/MemoryManager";
 import { VisibilityToggle } from "@/components/projects/VisibilityToggle";
@@ -100,6 +104,8 @@ interface ProjectPageClientProps {
     initialMemories: any[];
     initialVersions: any[];
     initialTags: Tag[];
+    initialPhases?: ProjectPhase[];
+    initialAutomations?: ProjectAutomation[];
     isAbmProject?: boolean;
     initialAbmRuns?: AbmRun[];
     isDiagnosisProject?: boolean;
@@ -116,6 +122,8 @@ export function ProjectPageClient({
     initialMemories,
     initialVersions,
     initialTags,
+    initialPhases = [],
+    initialAutomations = [],
     isAbmProject = false,
     initialAbmRuns = [],
     isDiagnosisProject = false,
@@ -1030,6 +1038,15 @@ export function ProjectPageClient({
 
                 {/* Right Sidebar (Col Span 1) */}
                 <div className="space-y-8">
+                    {/* Automations Section */}
+                    <div className="p-1">
+                        <AutomationsCard
+                            projectId={project.id}
+                            canEdit={canEdit}
+                            initialAutomations={initialAutomations}
+                        />
+                    </div>
+
                     {/* Memory Section */}
                     <div className="p-1">
                         <h3 className="font-medium mb-4 flex items-center justify-between">
@@ -1046,6 +1063,11 @@ export function ProjectPageClient({
                     {/* Instructions Section */}
                     <div className="p-1">
                         <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} canEdit={canEdit} initialVersions={initialVersions} />
+                    </div>
+
+                    {/* Phases Section */}
+                    <div className="p-1">
+                        <PhasesCard projectId={project.id} canEdit={canEdit} initialPhases={initialPhases} />
                     </div>
 
                     {/* Files Section */}

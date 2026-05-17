@@ -23,7 +23,14 @@
       "Bash(grep -r \"vercel.cron\\\\|/api.*cron\\\\|schedule.*run\" /c/Users/aleen/OneDrive/Desktop/deal-intellegence --include=*.json --include=*.ts --include=*.tsx)",
       "Bash(ls:*)",
       "Bash(curl:*)",
-      "Bash(node scripts/backfill-embeddings.mjs)"
+      "Bash(node scripts/backfill-embeddings.mjs)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(npx --no-install tsc --noEmit)"
     ]
-  }
+  },
+  "disabledMcpjsonServers": [
+    "supabase"
+  ]
 }

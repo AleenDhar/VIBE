@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { getProjectMemories } from "@/lib/actions/memories";
 import { getSystemPromptVersions } from "@/lib/actions/projects";
 import { getProjectTags } from "@/lib/actions/tags";
+import { listPhases } from "@/lib/actions/phases";
+import { listAutomations } from "@/lib/actions/automations";
 import { ProjectPageClient } from "@/components/projects/ProjectPageClient";
 
 export const dynamic = "force-dynamic";
@@ -164,6 +166,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     // Fetch tags attached to this project
     const projectTags = await getProjectTags(id);
 
+    // Fetch project phases (ordered pipeline of model+prompt+enabled stages).
+    const projectPhases = await listPhases(id);
+
+    // Fetch project automations (batch runners listed in the sidebar).
+    const projectAutomations = await listAutomations(id);
+
     return (
         <ProjectPageClient
             project={project}
@@ -175,6 +183,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
             initialMemories={allMemories}
             initialVersions={promptVersions}
             initialTags={projectTags}
+            initialPhases={projectPhases}
+            initialAutomations={projectAutomations}
             isAbmProject={isAbmProject}
             initialAbmRuns={abmRuns}
             isDiagnosisProject={isDiagnosisProject}

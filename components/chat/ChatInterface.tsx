@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, useState, useEffect, useRef } from "react";
+import { createElement, Fragment, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
@@ -211,9 +211,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     lastMsg.id = msg.id;
                     lastMsg.created_at = msg.created_at;
                     lastMsg.isProcessing = false;
+                    // Merge metadata (so phase-tagged final messages carry their
+                    // phase info onto the placeholder bubble created earlier by
+                    // a preceding thinking/tool step).
+                    lastMsg.metadata = { ...(lastMsg.metadata || {}), ...meta };
                 } else {
                     acc.push({
                         ...msg,
+                        metadata: meta,
                         thinkingSteps: [],
                         isProcessing: false,
                         content: msg.content || ""
@@ -829,6 +834,58 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 if (jsonStr.trim() === "[DONE]") continue;
                                 const data = JSON.parse(jsonStr);
 
+                                // Phase boundary events: only emitted when the
+                                // project has an enabled phase pipeline. They
+                                // split the response into per-phase assistant
+                                // bubbles so the user sees each stage labeled
+                                // (model + phase name) instead of one merged blob.
+                                if (data.type === 'phase_start') {
+                                    setMessages(prev => {
+                                        const next = [...prev];
+                                        const lastIdx = next.length - 1;
+                                        const last = next[lastIdx];
+                                        const phaseMeta = data.phase || {};
+                                        // Reuse the existing empty placeholder bubble for
+                                        // phase 1; otherwise push a new bubble.
+                                        if (last && last.role === 'assistant' && !last.content && !last.metadata?.phase) {
+                                            next[lastIdx] = {
+                                                ...last,
+                                                metadata: { ...(last.metadata || {}), phase: phaseMeta },
+                                                isProcessing: true,
+                                            };
+                                        } else {
+                                            next.push({
+                                                role: 'assistant',
+                                                content: '',
+                                                id: uuid(),
+                                                thinkingSteps: [],
+                                                isProcessing: true,
+                                                metadata: { phase: phaseMeta },
+                                                created_at: new Date().toISOString(),
+                                            });
+                                        }
+                                        return next;
+                                    });
+                                    setThinkingText(
+                                        data.phase?.name
+                                            ? `Phase ${data.phase.index}/${data.phase.total} — ${data.phase.name}…`
+                                            : `Phase ${data.phase?.index}/${data.phase?.total}…`
+                                    );
+                                    continue;
+                                }
+                                if (data.type === 'phase_end') {
+                                    setMessages(prev => {
+                                        const next = [...prev];
+                                        const lastIdx = next.length - 1;
+                                        const last = next[lastIdx];
+                                        if (last && last.role === 'assistant') {
+                                            next[lastIdx] = { ...last, isProcessing: false };
+                                        }
+                                        return next;
+                                    });
+                                    continue;
+                                }
+
                                 // Handle different event types from the stream
                                 setMessages(prev => {
                                     const newMessages = [...prev];
@@ -1324,8 +1381,31 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                             );
                         }
 
+                        const phaseInfo = msg.role === 'assistant' ? msg.metadata?.phase : null;
+                        const phaseHeading = phaseInfo
+                            ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
+                            : null;
+                        const phaseSubtitle = phaseInfo?.model_id || null;
+
                         return (
-                        <div key={i} className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <Fragment key={i}>
+                            {phaseHeading && (
+                                <div className="flex items-center gap-3 mx-auto w-full max-w-3xl pt-4 pb-1 select-none">
+                                    <div className="h-px flex-1 bg-border/60" />
+                                    <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
+                                        <span className="text-xs font-semibold tracking-wide text-foreground/80">
+                                            {phaseHeading}
+                                        </span>
+                                        {phaseSubtitle && (
+                                            <span className="text-[10px] text-muted-foreground/60 font-mono">
+                                                {phaseSubtitle}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="h-px flex-1 bg-border/60" />
+                                </div>
+                            )}
+                        <div className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                             {msg.role === 'assistant' && (
                                 <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
                                     <Bot className="h-5 w-5" />
@@ -1586,6 +1666,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 })()}
                             </div>
                         </div>
+                        </Fragment>
                         );
                     })}
 
