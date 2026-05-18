@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Switch } from "@/components/ui/switch";
@@ -18,19 +18,23 @@ import {
 import {
     createTask,
     deleteTask,
+    getChatPhaseProgress,
     listTasks,
     renameAutomation,
     updateTask,
     type AutomationTask,
     type AutomationTaskStatus,
+    type LivePhaseRow,
     type ProjectAutomation,
 } from "@/lib/actions/automations";
+import type { ProjectPhase } from "@/lib/actions/phases";
 import { formatDistanceToNow } from "date-fns";
 
 interface Props {
     projectId: string;
     automation: ProjectAutomation;
     initialTasks: AutomationTask[];
+    initialPhases: ProjectPhase[];
     canEdit: boolean;
 }
 
@@ -42,7 +46,20 @@ const STATUS_STYLES: Record<AutomationTaskStatus, string> = {
     stopped: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
 };
 
-export function AutomationDetailClient({ projectId, automation, initialTasks, canEdit }: Props) {
+export function AutomationDetailClient({ projectId, automation, initialTasks, initialPhases, canEdit }: Props) {
+    // Phases drive the per-phase columns. Sorted by position so columns line
+    // up left-to-right with the pipeline execution order. Includes disabled
+    // phases too — disabled phases don't run, so their cells will stay empty,
+    // and that empty cell is itself meaningful signal.
+    //
+    // useMemo here is load-bearing: a fresh-array-every-render version of this
+    // would invalidate the polling useEffect's deps on every render, which —
+    // combined with the effect calling setState — caused an infinite render
+    // loop (Maximum update depth exceeded).
+    const orderedPhases = useMemo(
+        () => [...initialPhases].sort((a, b) => a.position - b.position),
+        [initialPhases]
+    );
     const [tasks, setTasks] = useState<AutomationTask[]>(initialTasks);
     const [editingName, setEditingName] = useState(false);
     const [nameDraft, setNameDraft] = useState(automation.name || "");
@@ -51,23 +68,50 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
     const [busyId, setBusyId] = useState<string | null>(null);
     const [batchRunning, setBatchRunning] = useState(false);
     const [excludeAlreadyRan, setExcludeAlreadyRan] = useState(false);
+    // Live progress for the active phase of each running task, keyed by task.id.
+    const [liveProgress, setLiveProgress] = useState<Record<string, LivePhaseRow[]>>({});
     const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const anyRunning = tasks.some(t => t.status === "running");
 
-    // Poll for task status updates while any row is running.
+    // Poll for task status updates while any row is running. On each tick we
+    // also fetch live progress (tool calls + streamed text) for the currently-
+    // running phase of each running task so the active column updates live.
     useEffect(() => {
         if (!anyRunning) {
             if (pollTimer.current) {
                 clearInterval(pollTimer.current);
                 pollTimer.current = null;
             }
+            // Drop stale live state once nothing is running anymore.
+            // Guarded so we don't queue a re-render every time this branch
+            // runs — an unconditional setState would re-trigger the effect
+            // (since each {} is a new reference) and loop forever.
+            setLiveProgress(prev => (Object.keys(prev).length === 0 ? prev : {}));
             return;
         }
         if (pollTimer.current) return;
         pollTimer.current = setInterval(async () => {
             const fresh = await listTasks(automation.id);
             setTasks(fresh);
+
+            // For each task that's still running and has a chat + an active
+            // phase, fetch that phase's progress in parallel.
+            const running = fresh.filter(t => t.status === "running" && t.chat_id && t.last_phase_index);
+            if (running.length === 0) {
+                setLiveProgress({});
+                return;
+            }
+            const entries = await Promise.all(running.map(async t => {
+                // last_phase_index from the runner is the 1-based index; we
+                // tag chat_messages with phase.position, which equals the
+                // phase's slot. Pull from initialPhases to translate.
+                const activePhase = orderedPhases[(t.last_phase_index ?? 1) - 1];
+                if (!activePhase) return [t.id, []] as const;
+                const rows = await getChatPhaseProgress(t.chat_id!, activePhase.position);
+                return [t.id, rows] as const;
+            }));
+            setLiveProgress(Object.fromEntries(entries));
         }, 2000);
         return () => {
             if (pollTimer.current) {
@@ -75,7 +119,7 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                 pollTimer.current = null;
             }
         };
-    }, [anyRunning, automation.id]);
+    }, [anyRunning, automation.id, orderedPhases]);
 
     const refresh = async () => {
         const fresh = await listTasks(automation.id);
@@ -97,12 +141,15 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
         const result = await createTask(automation.id, "");
         if (!result.success) {
             alert(`Failed: ${result.error}`);
-        } else {
-            await refresh();
-            if (result.task) {
-                setEditingPromptId(result.task.id);
-                setPromptDraft("");
-            }
+            return;
+        }
+        // Use the row returned by the server action directly instead of
+        // re-fetching the whole list — saves a roundtrip and the UI feels
+        // instant.
+        if (result.task) {
+            setTasks(prev => [...prev, result.task!]);
+            setEditingPromptId(result.task.id);
+            setPromptDraft("");
         }
     };
 
@@ -157,6 +204,15 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
     const handleRunRow = async (task: AutomationTask) => {
         if (!task.enabled) return;
         setBusyId(task.id);
+        // Optimistic flip to 'running' so the button immediately becomes
+        // Stop and the polling effect (gated on anyRunning) kicks in. The
+        // server flips status='running' early too, so the next poll either
+        // confirms our optimistic state or replaces it with real data.
+        setTasks(prev => prev.map(t =>
+            t.id === task.id
+                ? { ...t, status: "running", last_phase_index: null, last_phase_total: null, last_phase_name: null, error: null }
+                : t
+        ));
         try {
             await runOne(task.id);
         } finally {
@@ -190,6 +246,12 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
         setBatchRunning(true);
         try {
             for (const task of eligible) {
+                // Optimistic flip — see handleRunRow rationale.
+                setTasks(prev => prev.map(t =>
+                    t.id === task.id
+                        ? { ...t, status: "running", last_phase_index: null, last_phase_total: null, last_phase_name: null, error: null }
+                        : t
+                ));
                 // Fire run, then poll until the task is no longer 'running'
                 // before moving to the next. This gives users sequential
                 // execution as requested.
@@ -286,14 +348,25 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                     No rows yet. {canEdit && "Click Add row to start."}
                 </div>
             ) : (
-                <div className="border border-border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
+                <div className="border border-border rounded-lg overflow-x-auto">
+                    <table className="w-full text-sm min-w-[1200px]">
                         <thead className="bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
                             <tr>
                                 <th className="px-2 py-2 w-10 text-center">On</th>
-                                <th className="px-3 py-2 text-left">Prompt</th>
+                                <th className="px-3 py-2 text-left w-64">Prompt</th>
+                                {orderedPhases.map(p => (
+                                    <th
+                                        key={p.id}
+                                        className="px-3 py-2 text-left w-72"
+                                        title={p.model_id || undefined}
+                                    >
+                                        {p.name || `Phase ${p.position}`}
+                                        {!p.enabled && (
+                                            <span className="ml-1 text-[9px] text-muted-foreground/50">(off)</span>
+                                        )}
+                                    </th>
+                                ))}
                                 <th className="px-3 py-2 text-left w-28">Status</th>
-                                <th className="px-3 py-2 text-left w-40">Last phase</th>
                                 <th className="px-3 py-2 text-left w-40">When</th>
                                 <th className="px-3 py-2 text-left w-20">Chat</th>
                                 <th className="px-3 py-2 text-right w-32">Actions</th>
@@ -304,9 +377,6 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                                 const isEditing = editingPromptId === task.id;
                                 const isBusy = busyId === task.id;
                                 const isRunning = task.status === "running";
-                                const phaseLabel = task.last_phase_index && task.last_phase_total
-                                    ? `${task.last_phase_index} of ${task.last_phase_total}${task.last_phase_name ? ` — ${task.last_phase_name}` : ""}`
-                                    : "—";
                                 const whenLabel = task.completed_at
                                     ? `${formatDistanceToNow(new Date(task.completed_at))} ago`
                                     : task.started_at
@@ -349,6 +419,35 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                                                 </button>
                                             )}
                                         </td>
+                                        {orderedPhases.map(phase => {
+                                            const output = task.phase_outputs?.find(
+                                                o => o.phase_position === phase.position
+                                            );
+                                            const isActivePhase =
+                                                isRunning && task.last_phase_index === phase.position;
+                                            const live = isActivePhase ? (liveProgress[task.id] || []) : [];
+
+                                            return (
+                                                <td key={phase.id} className="px-3 py-2 align-top">
+                                                    {output ? (
+                                                        <details className="group max-w-[280px]">
+                                                            <summary className="cursor-pointer text-xs text-foreground/90 leading-snug list-none">
+                                                                <span className="line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap">
+                                                                    {output.content || <span className="text-muted-foreground/50 italic">(empty response)</span>}
+                                                                </span>
+                                                                {output.content && output.content.length > 140 && (
+                                                                    <span className="text-[10px] text-primary/70 group-open:hidden ml-1">…more</span>
+                                                                )}
+                                                            </summary>
+                                                        </details>
+                                                    ) : isActivePhase ? (
+                                                        <LivePhaseCell rows={live} />
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground/40">—</span>
+                                                    )}
+                                                </td>
+                                            );
+                                        })}
                                         <td className="px-3 py-2 align-top">
                                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-medium ${STATUS_STYLES[task.status]}`}>
                                                 {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
@@ -359,9 +458,6 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                                                     {task.error}
                                                 </div>
                                             )}
-                                        </td>
-                                        <td className="px-3 py-2 align-top text-xs text-muted-foreground">
-                                            {phaseLabel}
                                         </td>
                                         <td className="px-3 py-2 align-top text-xs text-muted-foreground">
                                             {whenLabel}
@@ -424,6 +520,70 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, ca
                             })}
                         </tbody>
                     </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Live preview for the actively-running phase column. Renders a compact
+// stream of what's happened so far: tool calls, tool results, and any partial
+// final/thinking text. Updated by the 2-second polling loop, so it'll feel
+// slightly chunky but conveys progress clearly without us holding open a
+// per-row SSE stream.
+function LivePhaseCell({ rows }: { rows: LivePhaseRow[] }) {
+    // Pull out the latest non-empty assistant text so we can show streamed
+    // content as it grows. Skip "processing" placeholders.
+    const latestText = [...rows]
+        .reverse()
+        .find(r =>
+            (r.type === "final" || r.type === "message" || r.type === "thinking") &&
+            r.content && r.content.trim() && r.content.trim() !== "processing"
+        );
+    const toolEvents = rows.filter(r => r.type === "tool_call" || r.type === "tool_result");
+
+    return (
+        <div className="space-y-1 max-w-[280px]">
+            <div className="inline-flex items-center gap-1 text-[10px] text-sky-700 dark:text-sky-300">
+                <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                running…
+            </div>
+
+            {toolEvents.length > 0 && (
+                <div className="space-y-0.5">
+                    {toolEvents.slice(-4).map((ev, i) => (
+                        <div key={`${ev.id}-${i}`} className="text-[10px] font-mono text-muted-foreground/80 leading-tight">
+                            {ev.type === "tool_call" ? (
+                                <span>
+                                    <span className="text-emerald-700 dark:text-emerald-400">→</span>{" "}
+                                    <span className="text-foreground/80">{ev.tool || "tool"}</span>
+                                    {ev.args && (
+                                        <span className="text-muted-foreground/60">
+                                            ({(() => {
+                                                try {
+                                                    const s = typeof ev.args === "string" ? ev.args : JSON.stringify(ev.args);
+                                                    return s.length > 50 ? s.slice(0, 50) + "…" : s;
+                                                } catch { return ""; }
+                                            })()})
+                                        </span>
+                                    )}
+                                </span>
+                            ) : (
+                                <span>
+                                    <span className="text-amber-700 dark:text-amber-400">←</span>{" "}
+                                    <span className="text-muted-foreground/70 line-clamp-1">
+                                        {(ev.content || "").slice(0, 80)}
+                                    </span>
+                                </span>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {latestText?.content && (
+                <div className="text-[11px] text-foreground/70 leading-snug line-clamp-3 whitespace-pre-wrap mt-1">
+                    {latestText.content}
                 </div>
             )}
         </div>

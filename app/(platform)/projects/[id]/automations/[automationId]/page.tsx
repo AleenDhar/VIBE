@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { getAutomation, listTasks } from "@/lib/actions/automations";
+import { listPhases } from "@/lib/actions/phases";
 import { AutomationDetailClient } from "@/components/automations/AutomationDetailClient";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,10 @@ export default async function AutomationDetailPage({
     }
 
     const tasks = await listTasks(automationId);
+    // Phases are loaded so the task table can render a column per phase using
+    // current phase names (renaming a phase updates the header live; historical
+    // outputs in phase_outputs keep the name they had at run time).
+    const phases = await listPhases(projectId);
 
     return (
         <div className="flex flex-col w-full max-w-screen-2xl mx-auto px-4 py-6">
@@ -63,6 +68,7 @@ export default async function AutomationDetailPage({
                 projectId={projectId}
                 automation={automation}
                 initialTasks={tasks}
+                initialPhases={phases}
                 canEdit={canEdit}
             />
         </div>

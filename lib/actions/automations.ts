@@ -15,6 +15,15 @@ export interface ProjectAutomation {
     updated_at: string;
 }
 
+export interface AutomationPhaseOutput {
+    phase_index: number;
+    phase_position: number;
+    phase_name: string | null;
+    phase_model_id: string | null;
+    content: string;
+    completed_at: string;
+}
+
 export interface AutomationTask {
     id: string;
     automation_id: string;
@@ -30,39 +39,34 @@ export interface AutomationTask {
     last_phase_name: string | null;
     error: string | null;
     stop_requested: boolean;
+    phase_outputs: AutomationPhaseOutput[];
     created_at: string;
     updated_at: string;
 }
 
 // Mirrors the canEdit logic in app/(platform)/projects/[id]/page.tsx.
+//
+// All three checks fire in parallel. Worst case is one project-not-found
+// roundtrip; best case is three short-circuits in a single round-trip's
+// worth of wall time. The redundant work is cheap (small indexed lookups)
+// compared to sequential awaits that paid the full latency hit on every
+// non-owner mutation.
 async function userCanEditProject(projectId: string): Promise<boolean> {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return false;
 
-    const { data: project } = await supabase
-        .from("projects")
-        .select("owner_id")
-        .eq("id", projectId)
-        .single();
-    if (!project) return false;
-    if (project.owner_id === user.id) return true;
+    const [projectRes, profileRes, membershipRes] = await Promise.all([
+        supabase.from("projects").select("owner_id").eq("id", projectId).single(),
+        supabase.from("profiles").select("role").eq("id", user.id).single(),
+        supabase.from("project_members").select("role")
+            .eq("project_id", projectId).eq("user_id", user.id).maybeSingle(),
+    ]);
 
-    const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .single();
-    if (profile?.role === "admin" || profile?.role === "super_admin") return true;
-
-    const { data: membership } = await supabase
-        .from("project_members")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-    return membership?.role === "editor";
+    if (!projectRes.data) return false;
+    if (projectRes.data.owner_id === user.id) return true;
+    if (profileRes.data?.role === "admin" || profileRes.data?.role === "super_admin") return true;
+    return membershipRes.data?.role === "editor";
 }
 
 async function automationProjectId(automationId: string): Promise<string | null> {
@@ -201,19 +205,25 @@ export async function createTask(
 ): Promise<{ success: boolean; task?: AutomationTask; error?: string }> {
     const projectId = await automationProjectId(automationId);
     if (!projectId) return { success: false, error: "Automation not found." };
-    if (!(await userCanEditProject(projectId))) {
-        return { success: false, error: "You don't have edit access." };
-    }
 
     const supabase = await createClient();
 
-    const { data: existing } = await supabase
-        .from("automation_tasks")
-        .select("position")
-        .eq("automation_id", automationId)
-        .order("position", { ascending: false })
-        .limit(1);
-    const nextPosition = (existing?.[0]?.position ?? 0) + 1;
+    // Run the permission check and the max-position lookup in parallel.
+    // Wasted work if permission fails is cheap (single indexed lookup) and
+    // we save a full roundtrip on every Add-row click.
+    const [canEdit, positionRes] = await Promise.all([
+        userCanEditProject(projectId),
+        supabase
+            .from("automation_tasks")
+            .select("position")
+            .eq("automation_id", automationId)
+            .order("position", { ascending: false })
+            .limit(1),
+    ]);
+
+    if (!canEdit) return { success: false, error: "You don't have edit access." };
+
+    const nextPosition = (positionRes.data?.[0]?.position ?? 0) + 1;
 
     const { data, error } = await supabase
         .from("automation_tasks")
@@ -267,6 +277,53 @@ export async function updateTask(
 
     revalidatePath(`/projects/${projectId}/automations/${task.automation_id}`);
     return { success: true };
+}
+
+// Live-progress view for a phase that's currently running. Returns the
+// assistant chat_messages tagged with that phase's position, in chronological
+// order, so the UI can show tool calls + streamed text in the matching
+// column while the agent is still working.
+export interface LivePhaseRow {
+    id: string;
+    type: string | null;
+    content: string | null;
+    tool: string | null;
+    args: any;
+    created_at: string;
+}
+
+export async function getChatPhaseProgress(
+    chatId: string,
+    phasePosition: number
+): Promise<LivePhaseRow[]> {
+    const supabase = await createClient();
+    // RLS will reject reads on chats the user can't see, so no extra ACL here.
+    const { data, error } = await supabase
+        .from("chat_messages")
+        .select("id, type, content, metadata, created_at")
+        .eq("chat_id", chatId)
+        .eq("role", "assistant")
+        .order("created_at", { ascending: true });
+    if (error) {
+        console.error("getChatPhaseProgress error:", error);
+        return [];
+    }
+    const rows: LivePhaseRow[] = [];
+    for (const m of data || []) {
+        const meta = typeof m.metadata === "string"
+            ? (() => { try { return JSON.parse(m.metadata) || {}; } catch { return {}; } })()
+            : (m.metadata || {});
+        if (meta?.phase?.position !== phasePosition) continue;
+        rows.push({
+            id: m.id,
+            type: (m as any).type ?? meta.type ?? null,
+            content: m.content ?? null,
+            tool: meta.tool || meta.name || meta.tool_name || null,
+            args: meta.args ?? null,
+            created_at: m.created_at,
+        });
+    }
+    return rows;
 }
 
 export async function deleteTask(

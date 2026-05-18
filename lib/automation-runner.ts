@@ -44,6 +44,24 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
     if (!automation) return { ok: false, error: "Automation not found" };
     const projectId = automation.project_id as string;
 
+    // Flip to 'running' BEFORE the heavy setup work (RAG, chat creation,
+    // phase validation, etc.) so the UI sees the state change within the
+    // first 2-second poll tick instead of staring at 'pending' for several
+    // seconds. chat_id is filled in by a follow-up update once the chat row
+    // exists. If any setup step fails below we overwrite to 'failed'.
+    await markTask(supabase, taskId, {
+        status: "running",
+        started_at: new Date().toISOString(),
+        completed_at: null,
+        last_phase_index: null,
+        last_phase_total: null,
+        last_phase_name: null,
+        error: null,
+        stop_requested: false,
+        phase_outputs: [],
+        chat_id: null,
+    });
+
     // 2. Pull profile + base prompt + api keys, mirroring /api/chat setup.
     const { data: profile } = await supabase
         .from("profiles")
@@ -152,17 +170,11 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
         includeLegacyProjectPrompt: false, // phases always exist here
     });
 
-    // 6. Mark task running and store chat link.
+    // 6. Status already flipped to 'running' above; now just attach the chat
+    // link and the total phase count for progress display.
     await markTask(supabase, taskId, {
-        status: "running",
         chat_id: chatId,
-        started_at: new Date().toISOString(),
-        completed_at: null,
-        last_phase_index: null,
         last_phase_total: phases.length,
-        last_phase_name: null,
-        error: null,
-        stop_requested: false,
     });
 
     // 7. Run the phase pipeline with progress callbacks.
@@ -190,12 +202,30 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
                     last_phase_name: phase.name,
                 });
             },
-            onPhaseEnd: async (phase) => {
+            onPhaseEnd: async (phase, accumulatedText) => {
                 lastPhase = phase;
+                // Append this phase's output to the task's phase_outputs
+                // array. Read-modify-write — fine since a single task only
+                // ever runs one pipeline at a time.
+                const { data: current } = await supabase
+                    .from("automation_tasks")
+                    .select("phase_outputs")
+                    .eq("id", taskId)
+                    .maybeSingle();
+                const prior = Array.isArray(current?.phase_outputs) ? current!.phase_outputs : [];
+                const nextOutputs = [...prior, {
+                    phase_index: phase.index,
+                    phase_position: phase.position,
+                    phase_name: phase.name,
+                    phase_model_id: phase.model_id,
+                    content: accumulatedText,
+                    completed_at: new Date().toISOString(),
+                }];
                 await markTask(supabase, taskId, {
                     last_phase_index: phase.index,
                     last_phase_total: phase.total,
                     last_phase_name: phase.name,
+                    phase_outputs: nextOutputs,
                 });
             },
             onError: (msg) => {
@@ -240,8 +270,18 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
 
 async function markTask(supabase: any, taskId: string, patch: Record<string, unknown>) {
     try {
-        await supabase.from("automation_tasks").update(patch).eq("id", taskId);
+        const { error } = await supabase.from("automation_tasks").update(patch).eq("id", taskId);
+        if (error) {
+            // Loud log so missing-column / RLS issues surface in the server
+            // console instead of silently corrupting the task row. The most
+            // common cause is a migration that hasn't been applied yet.
+            console.error(
+                `[automation-runner] markTask UPDATE failed for task ${taskId}. ` +
+                `Patch keys: ${Object.keys(patch).join(", ")}. ` +
+                `Error: ${error.message}`
+            );
+        }
     } catch (e) {
-        console.warn("markTask failed:", e);
+        console.error(`[automation-runner] markTask threw for task ${taskId}:`, e);
     }
 }
