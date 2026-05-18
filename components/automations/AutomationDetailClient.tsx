@@ -883,7 +883,18 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                             )}
                                         </td>
                                         <td className="px-3 py-2 align-top text-xs text-muted-foreground">
-                                            {whenLabel}
+                                            <div>{whenLabel}</div>
+                                            {/* Total run cost — the chat's real cost from the
+                                                agent server, NOT an estimate. Per-cell numbers
+                                                are estimates that should sum to roughly this. */}
+                                            {task.chat_id && chatCosts[task.chat_id] !== undefined && (
+                                                <div
+                                                    className="text-[10px] text-emerald-700 dark:text-emerald-400 font-mono mt-0.5"
+                                                    title="Total cost for this row (sum of all phase API calls)"
+                                                >
+                                                    ${chatCosts[task.chat_id].toFixed(4)}
+                                                </div>
+                                            )}
                                         </td>
                                         <td className="px-3 py-2 align-top">
                                             {task.chat_id ? (
