@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil, Search } from "lucide-react";
 import Link from "next/link";
-import { SystemPromptCard } from "@/components/projects/SystemPromptCard";
 import { PhasesCard } from "@/components/projects/PhasesCard";
 import { AutomationsCard } from "@/components/projects/AutomationsCard";
 import type { ProjectPhase } from "@/lib/actions/phases";
@@ -1058,11 +1057,6 @@ export function ProjectPageClient({
                         <div className="text-sm text-muted-foreground">
                             <MemoryManager projectId={project.id} memories={initialMemories} canEdit={canEdit} />
                         </div>
-                    </div>
-
-                    {/* Instructions Section */}
-                    <div className="p-1">
-                        <SystemPromptCard projectId={project.id} initialPrompt={project.system_prompt} canEdit={canEdit} initialVersions={initialVersions} />
                     </div>
 
                     {/* Phases Section */}
