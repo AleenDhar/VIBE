@@ -3,12 +3,10 @@
 import { createElement, Fragment, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
+import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, ChevronRight, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
 import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { ChartRenderer } from "@/components/chat/ChartRenderer";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
@@ -20,93 +18,6 @@ import { getCurrentUserRole } from "@/lib/actions/admin";
 import { UsagePill } from "@/components/chat/UsagePill";
 import { ToolTimeline } from "@/components/chat/ToolTimeline";
 
-// Shared markdown renderer used for both final content and thinking step content
-function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
-    return (
-        <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-                code: ({ node, ...props }: any) => {
-                    const match = /language-(\w+)/.exec((props.className || ''))
-                    if (match && match[1] === 'chart') {
-                        return <ChartRenderer jsonString={String(props.children).replace(/\n$/, '')} />
-                    }
-                    return !match ? (
-                        <code className="bg-muted px-1.5 py-0.5 rounded text-[0.9em] font-mono" {...props} />
-                    ) : (
-                        <code className="block font-mono text-xs md:text-sm" {...props} />
-                    )
-                },
-                pre: ({ node, ...props }: any) => (
-                    <pre className="bg-muted/50 p-4 rounded-lg my-3 overflow-x-auto border border-border/50" {...props} />
-                ),
-                img: ({ node, ...props }: any) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img className="max-w-full h-auto rounded-lg my-3 border border-border/50 shadow-sm" {...props} alt={props.alt || "Image"} />
-                ),
-                p: ({ node, ...props }: any) => (
-                    <p className={`${compact ? 'mb-1.5' : 'mb-3'} last:mb-0 leading-7`} {...props} />
-                ),
-                a: ({ node, ...props }: any) => (
-                    <a className="text-primary font-medium hover:underline underline-offset-4" target="_blank" rel="noopener noreferrer" {...props} />
-                ),
-                ul: ({ node, ...props }: any) => (
-                    <ul className={`list-disc pl-6 ${compact ? 'mb-1.5' : 'mb-3'} space-y-1.5 marker:text-muted-foreground`} {...props} />
-                ),
-                ol: ({ node, ...props }: any) => (
-                    <ol className={`list-decimal pl-6 ${compact ? 'mb-1.5' : 'mb-3'} space-y-1.5 marker:text-muted-foreground`} {...props} />
-                ),
-                li: ({ node, ...props }: any) => (
-                    <li className="pl-1" {...props} />
-                ),
-                blockquote: ({ node, ...props }: any) => (
-                    <blockquote className="border-l-4 border-primary/30 pl-4 py-1 italic text-muted-foreground my-3 bg-primary/5 rounded-r-md" {...props} />
-                ),
-                table: ({ node, ...props }: any) => (
-                    <div className="overflow-x-auto my-4 rounded-lg border border-border max-w-full">
-                        <table className="w-full text-sm text-left border-collapse" {...props} />
-                    </div>
-                ),
-                thead: ({ node, ...props }: any) => (
-                    <thead className="bg-muted text-muted-foreground uppercase text-xs tracking-wider" {...props} />
-                ),
-                tbody: ({ node, ...props }: any) => (
-                    <tbody className="divide-y divide-border/50" {...props} />
-                ),
-                tr: ({ node, ...props }: any) => (
-                    <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
-                ),
-                th: ({ node, ...props }: any) => (
-                    <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
-                ),
-                hr: ({ node, ...props }: any) => (
-                    <hr className="my-6 border-border/50" {...props} />
-                ),
-                td: ({ node, ...props }: any) => (
-                    <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
-                ),
-                h1: ({ node, ...props }: any) => (
-                    <h1 className="text-xl font-bold mt-5 mb-3 text-foreground" {...props} />
-                ),
-                h2: ({ node, ...props }: any) => (
-                    <h2 className="text-lg font-semibold mt-4 mb-2 text-foreground border-b border-border/40 pb-1" {...props} />
-                ),
-                h3: ({ node, ...props }: any) => (
-                    <h3 className="text-base font-semibold mt-3 mb-2 text-foreground" {...props} />
-                ),
-                h4: ({ node, ...props }: any) => (
-                    <h4 className="text-sm font-semibold mt-2 mb-1 text-foreground" {...props} />
-                ),
-                strong: ({ node, ...props }: any) => (
-                    <strong className="font-semibold text-foreground" {...props} />
-                ),
-            }}
-        >
-            {content}
-        </ReactMarkdown>
-    );
-}
-
 interface ChatProps {
     projectId: string | null;
     chatId: string;
@@ -114,9 +25,12 @@ interface ChatProps {
     initialInput?: string;
     initialModel?: string;
     initialImages?: string[];
+    // Optional — passed when this chat was created by an automation task.
+    // Enables the per-phase rerun button beside each phase divider.
+    automationTaskId?: string | null;
 }
 
-export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages }: ChatProps) {
+export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages, automationTaskId }: ChatProps) {
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
@@ -242,6 +156,49 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
     // State definitions
     const [messages, setMessages] = useState<any[]>(processedInitialMessages);
+    // Per-phase collapse state. Set holds the phase positions that are
+    // currently collapsed (everything below the divider is hidden). Default:
+    // all expanded.
+    const [collapsedPhases, setCollapsedPhases] = useState<Set<number>>(new Set());
+    // Per-phase rerun busy state — used to show a spinner on the row's
+    // rerun button while the POST is in flight.
+    const [rerunningPhase, setRerunningPhase] = useState<number | null>(null);
+
+    const togglePhase = (position: number) => {
+        setCollapsedPhases(prev => {
+            const next = new Set(prev);
+            if (next.has(position)) next.delete(position);
+            else next.add(position);
+            return next;
+        });
+    };
+
+    // Triggers a rerun of the given phase + all phases after it via the
+    // automation runner. Reuses the existing task's chat. Only available
+    // when the chat was created by an automation task.
+    const handleRerunFromPhase = async (position: number) => {
+        if (!automationTaskId) return;
+        if (rerunningPhase !== null) return;
+        if (!confirm(`Re-run phase ${position} and every phase after it?`)) return;
+        setRerunningPhase(position);
+        try {
+            const res = await fetch(
+                `/api/automations/tasks/${automationTaskId}/phases/${position}/run`,
+                { method: "POST" }
+            );
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                alert(`Failed to start rerun: ${body.error || res.statusText}`);
+            } else {
+                // Reload the page so the chat refetches messages with the
+                // newly-tagged phase rows. Simpler than threading rerun
+                // streaming into ChatInterface.
+                window.location.reload();
+            }
+        } finally {
+            setRerunningPhase(null);
+        }
+    };
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -1382,29 +1339,67 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         }
 
                         const phaseInfo = msg.role === 'assistant' ? msg.metadata?.phase : null;
-                        const phaseHeading = phaseInfo
+                        // Only show the divider at a phase BOUNDARY — i.e.
+                        // when this message's phase position differs from
+                        // the previous message's. Without this guard the
+                        // divider repeats above every chat_message row a
+                        // phase produced (thinking, tool_call, tool_result,
+                        // content), which is several per phase.
+                        const prevMsg = i > 0 ? messages[i - 1] : null;
+                        const prevPhasePosition = prevMsg?.metadata?.phase?.position ?? null;
+                        const showPhaseDivider = phaseInfo && phaseInfo.position !== prevPhasePosition;
+                        const phaseHeading = showPhaseDivider
                             ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
                             : null;
-                        const phaseSubtitle = phaseInfo?.model_id || null;
+                        const phaseSubtitle = showPhaseDivider ? (phaseInfo?.model_id || null) : null;
+                        // Hide message body when its phase is collapsed.
+                        // Divider itself still renders so the user can expand.
+                        const inCollapsedPhase = phaseInfo && collapsedPhases.has(phaseInfo.position);
+                        const isPhaseCollapsed = phaseInfo && collapsedPhases.has(phaseInfo.position);
 
                         return (
                         <Fragment key={i}>
                             {phaseHeading && (
                                 <div className="flex items-center gap-3 mx-auto w-full max-w-3xl pt-4 pb-1 select-none">
                                     <div className="h-px flex-1 bg-border/60" />
-                                    <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
-                                        <span className="text-xs font-semibold tracking-wide text-foreground/80">
+                                    <button
+                                        type="button"
+                                        onClick={() => togglePhase(phaseInfo!.position)}
+                                        className="flex flex-col items-center gap-0.5 whitespace-nowrap hover:opacity-80 transition-opacity cursor-pointer"
+                                        title={isPhaseCollapsed ? "Click to expand" : "Click to collapse"}
+                                    >
+                                        <span className="text-xs font-semibold tracking-wide text-foreground/80 inline-flex items-center gap-1">
+                                            {isPhaseCollapsed ? (
+                                                <ChevronRight className="h-3 w-3 text-muted-foreground/60" />
+                                            ) : (
+                                                <ChevronDown className="h-3 w-3 text-muted-foreground/60" />
+                                            )}
                                             {phaseHeading}
                                         </span>
-                                        {phaseSubtitle && (
+                                        {phaseSubtitle && !isPhaseCollapsed && (
                                             <span className="text-[10px] text-muted-foreground/60 font-mono">
                                                 {phaseSubtitle}
                                             </span>
                                         )}
-                                    </div>
+                                    </button>
+                                    {automationTaskId && (
+                                        <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-6 w-6 text-emerald-600 hover:text-emerald-700 shrink-0"
+                                            onClick={() => handleRerunFromPhase(phaseInfo!.position)}
+                                            disabled={rerunningPhase !== null}
+                                            title={`Re-run from Phase ${phaseInfo!.position} onwards`}
+                                        >
+                                            {rerunningPhase === phaseInfo!.position
+                                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                                : <RotateCcw className="h-3 w-3" />}
+                                        </Button>
+                                    )}
                                     <div className="h-px flex-1 bg-border/60" />
                                 </div>
                             )}
+                        {inCollapsedPhase ? null : (
                         <div className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                             {msg.role === 'assistant' && (
                                 <div className="h-8 w-8 rounded-full bg-background border flex items-center justify-center text-primary flex-shrink-0 mt-1 shadow-sm">
@@ -1666,6 +1661,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 })()}
                             </div>
                         </div>
+                        )}
                         </Fragment>
                         );
                     })}

@@ -44,6 +44,15 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
         .order("sequence", { ascending: true })
         .order("created_at", { ascending: true });
 
+    // If this chat was created by an automation task, the per-phase Rerun
+    // button needs the taskId to invoke /api/automations/tasks/.../phases/.../run.
+    // Cheap one-row lookup; null when the chat isn't tied to an automation.
+    const { data: linkedTask } = await supabase
+        .from("automation_tasks")
+        .select("id")
+        .eq("chat_id", chatId)
+        .maybeSingle();
+
     return (
         <div className="flex flex-col h-full gap-2">
             <div className="h-full">
@@ -51,6 +60,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
                     projectId={projectId}
                     chatId={chatId}
                     initialMessages={messages || []}
+                    automationTaskId={linkedTask?.id || null}
                 />
             </div>
         </div>

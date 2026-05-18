@@ -62,6 +62,15 @@ export interface RunPhasePipelineInput {
     phases: Phase[];
     apiKeys: Record<string, string>;
     agentApiUrl: string;
+    // Override the displayed "of N" total. Defaults to phases.length. Set
+    // this when rerunning a subset (e.g., one phase from the middle) so the
+    // phaseMeta.total still reflects the project-level total instead of
+    // showing "Phase 5 of 1".
+    totalPhases?: number;
+    // Pre-populate the accumulator with outputs from prior phases that
+    // already ran. Used by single-phase reruns so the rerun phase still
+    // sees the prior context in its "## Prior Phase Outputs" block.
+    priorPhaseOutputs?: Array<{ phase: PhaseMeta; content: string }>;
 }
 
 export interface PipelineResult {
@@ -179,7 +188,9 @@ export async function runPhasePipeline(
     callbacks: PipelineCallbacks = {}
 ): Promise<PipelineResult> {
     const { supabase, chatId, projectId, sharedSystemPrefix, messagesPayload, phases, apiKeys, agentApiUrl } = input;
-    const totalPhases = phases.length;
+    // totalPhases defaults to phases.length but can be overridden so
+    // single-phase reruns still show e.g. "Phase 5 of 6" not "Phase 5 of 1".
+    const totalPhases = input.totalPhases ?? phases.length;
     // Prior-phase outputs are now embedded into the next phase's SYSTEM
     // PROMPT instead of being appended to the messages array. Two reasons:
     //   1. Newer Anthropic models (Sonnet 4.6/4.7, Opus 4.7) refuse a
@@ -193,7 +204,12 @@ export async function runPhasePipeline(
     //      "cache_control cannot be set for empty text blocks."
     // Embedding outputs into the system prompt sidesteps both issues and
     // keeps the messages array always ending with the user's message.
-    const accumulatedPhaseOutputs: { phase: PhaseMeta; content: string }[] = [];
+    //
+    // Pre-populated from input.priorPhaseOutputs when a single-phase rerun
+    // wants the rerunning phase to see outputs from phases that ran in a
+    // previous invocation.
+    const accumulatedPhaseOutputs: { phase: PhaseMeta; content: string }[] =
+        input.priorPhaseOutputs ? [...input.priorPhaseOutputs] : [];
     let lastPhase: PhaseMeta | undefined;
     let finalText = "";
 
@@ -211,7 +227,11 @@ export async function runPhasePipeline(
         }
 
         const phaseMeta: PhaseMeta = {
-            index: idx + 1,
+            // Use the project-level position as the displayed index. When
+            // running the full pipeline, position == idx+1 (1-based). When
+            // rerunning just one phase from the middle, idx is 0 but the
+            // user should still see e.g. "Phase 5 of 6".
+            index: phase.position,
             total: totalPhases,
             position: phase.position,
             name: phase.name,
@@ -256,12 +276,46 @@ export async function runPhasePipeline(
         // only the most-recent row got the phase tag (often a placeholder).
         const phaseStartIso = new Date().toISOString();
 
+        // AbortController lets us actually cancel the in-flight agent stream
+        // when the user hits Stop mid-phase. Without this, Stop only fires
+        // between phases and the user has to wait for the current phase to
+        // run to completion before anything happens.
+        const upstreamController = new AbortController();
+
+        // Helper: tag every assistant row the agent has written for THIS
+        // phase so far. Used both as a periodic live update during the
+        // stream and as a final pass after the stream closes. Without the
+        // live updates the chat divider only appears AFTER a phase finishes
+        // — which can be minutes during long tool-heavy phases.
+        const tagPhaseRows = async () => {
+            try {
+                const { data: phaseRows } = await supabase
+                    .from("chat_messages")
+                    .select("id, metadata")
+                    .eq("chat_id", chatId)
+                    .eq("role", "assistant")
+                    .gte("created_at", phaseStartIso);
+                for (const row of phaseRows || []) {
+                    const existing = row.metadata || {};
+                    // Skip rows that are already tagged for this phase.
+                    if (existing?.phase?.position === phaseMeta.position) continue;
+                    await supabase
+                        .from("chat_messages")
+                        .update({ metadata: { ...existing, phase: phaseMeta } })
+                        .eq("id", row.id);
+                }
+            } catch (tagErr) {
+                console.warn("runPhasePipeline: failed to tag phase metadata:", tagErr);
+            }
+        };
+
         let upstream: Response;
         try {
             upstream = await fetch(agentApiUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(phasePayload),
+                signal: upstreamController.signal,
             });
         } catch (fetchErr: any) {
             const msg = `Phase ${phaseMeta.index} agent fetch failed: ${fetchErr?.message || fetchErr}`;
@@ -280,11 +334,44 @@ export async function runPhasePipeline(
         const decoder = new TextDecoder();
         let parseBuf = "";
         let phaseText = "";
+        // Throttle counters. The DB-touching work is heavy enough that we
+        // can't run it on every chunk; we time-gate each kind of check.
+        let lastStopCheckMs = 0;
+        let lastTagMs = 0;
+        let stoppedMidPhase = false;
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             if (value) callbacks.onPhaseChunk?.(value);
+
+            // Throttled cooperative stop check. On stop, abort the upstream
+            // fetch so the agent stops billing tokens and the read loop
+            // unwinds cleanly.
+            if (callbacks.shouldStop) {
+                const nowMs = Date.now();
+                if (nowMs - lastStopCheckMs > 1000) {
+                    lastStopCheckMs = nowMs;
+                    if (await callbacks.shouldStop()) {
+                        stoppedMidPhase = true;
+                        try { upstreamController.abort(); } catch {}
+                        try { await reader.cancel(); } catch {}
+                        break;
+                    }
+                }
+            }
+
+            // Live phase tagging — keep newly-written assistant rows tagged
+            // with this phase's metadata so the chat divider renders during
+            // the stream, not just after the phase finishes. Fire-and-forget
+            // so we don't add latency to the read loop.
+            {
+                const nowMs = Date.now();
+                if (nowMs - lastTagMs > 2000) {
+                    lastTagMs = nowMs;
+                    void tagPhaseRows();
+                }
+            }
 
             parseBuf += decoder.decode(value, { stream: true });
             const events = parseBuf.split("\n\n");
@@ -308,6 +395,12 @@ export async function runPhasePipeline(
             }
         }
 
+        // If the user stopped mid-phase, exit immediately without further
+        // tagging or accumulating. The runner will mark status='stopped'.
+        if (stoppedMidPhase) {
+            return { stopped: true, failed: false, lastPhase: phaseMeta, finalText };
+        }
+
         // Skip phases that produced no visible text (the agent might have
         // only emitted tool calls and tool results). Including an empty
         // assistant block in subsequent payloads previously triggered
@@ -319,25 +412,9 @@ export async function runPhasePipeline(
         }
         lastPhase = phaseMeta;
 
-        // Tag every assistant chat_messages row the agent persisted during
-        // this phase so the chat UI can group them under one phase divider.
-        try {
-            const { data: phaseRows } = await supabase
-                .from("chat_messages")
-                .select("id, metadata")
-                .eq("chat_id", chatId)
-                .eq("role", "assistant")
-                .gte("created_at", phaseStartIso);
-            for (const row of phaseRows || []) {
-                const mergedMeta = { ...(row.metadata || {}), phase: phaseMeta };
-                await supabase
-                    .from("chat_messages")
-                    .update({ metadata: mergedMeta })
-                    .eq("id", row.id);
-            }
-        } catch (tagErr) {
-            console.warn("runPhasePipeline: failed to tag phase metadata:", tagErr);
-        }
+        // Final tagging pass — catches any rows the agent persisted between
+        // the last live tag (up to 2s ago) and the end of the stream.
+        await tagPhaseRows();
 
         await callbacks.onPhaseEnd?.(phaseMeta, phaseText);
     }
