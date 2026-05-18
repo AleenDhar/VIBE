@@ -318,16 +318,26 @@ export async function runPhasePipeline(
                 signal: upstreamController.signal,
             });
         } catch (fetchErr: any) {
+            // Phase fetch failed — log + emit error event but DO NOT halt
+            // the pipeline. Continue to the next phase so a single bad call
+            // doesn't sink an entire 6-phase ABM run. The error is
+            // surfaced via onError (SSE to chat, error column for tasks).
             const msg = `Phase ${phaseMeta.index} agent fetch failed: ${fetchErr?.message || fetchErr}`;
+            console.error(`[phase-pipeline] ${msg} — continuing to next phase`);
             await callbacks.onError?.(msg, phaseMeta);
-            return { stopped: false, failed: true, lastPhase: phaseMeta, finalText, error: msg };
+            await callbacks.onPhaseEnd?.(phaseMeta, "");
+            lastPhase = phaseMeta;
+            continue;
         }
 
         if (!upstream.ok || !upstream.body) {
             const errText = await upstream.text().catch(() => "");
             const msg = `Phase ${phaseMeta.index} agent call failed: ${upstream.status} ${errText}`;
+            console.error(`[phase-pipeline] ${msg} — continuing to next phase`);
             await callbacks.onError?.(msg, phaseMeta);
-            return { stopped: false, failed: true, lastPhase: phaseMeta, finalText, error: msg };
+            await callbacks.onPhaseEnd?.(phaseMeta, "");
+            lastPhase = phaseMeta;
+            continue;
         }
 
         const reader = upstream.body.getReader();
@@ -339,66 +349,89 @@ export async function runPhasePipeline(
         let lastStopCheckMs = 0;
         let lastTagMs = 0;
         let stoppedMidPhase = false;
+        let streamError: unknown = null;
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) callbacks.onPhaseChunk?.(value);
+        // Wrap the read loop so a mid-stream network drop / agent crash
+        // doesn't halt the whole pipeline. We capture the error, exit the
+        // loop, and let the post-loop logic decide what to do.
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                if (value) callbacks.onPhaseChunk?.(value);
 
-            // Throttled cooperative stop check. On stop, abort the upstream
-            // fetch so the agent stops billing tokens and the read loop
-            // unwinds cleanly.
-            if (callbacks.shouldStop) {
-                const nowMs = Date.now();
-                if (nowMs - lastStopCheckMs > 1000) {
-                    lastStopCheckMs = nowMs;
-                    if (await callbacks.shouldStop()) {
-                        stoppedMidPhase = true;
-                        try { upstreamController.abort(); } catch {}
-                        try { await reader.cancel(); } catch {}
-                        break;
-                    }
-                }
-            }
-
-            // Live phase tagging — keep newly-written assistant rows tagged
-            // with this phase's metadata so the chat divider renders during
-            // the stream, not just after the phase finishes. Fire-and-forget
-            // so we don't add latency to the read loop.
-            {
-                const nowMs = Date.now();
-                if (nowMs - lastTagMs > 2000) {
-                    lastTagMs = nowMs;
-                    void tagPhaseRows();
-                }
-            }
-
-            parseBuf += decoder.decode(value, { stream: true });
-            const events = parseBuf.split("\n\n");
-            parseBuf = events.pop() || "";
-            for (const ev of events) {
-                if (!ev.startsWith("data: ")) continue;
-                const json = ev.slice(6).trim();
-                if (!json || json === "[DONE]") continue;
-                try {
-                    const obj = JSON.parse(json);
-                    if (obj.type === "token" || obj.type === "content") {
-                        phaseText += obj.content || obj.token || "";
-                    } else if (obj.type === "final" || obj.type === "complete") {
-                        if (typeof obj.content === "string" && obj.content.length > phaseText.length) {
-                            phaseText = obj.content;
+                // Throttled cooperative stop check. On stop, abort the upstream
+                // fetch so the agent stops billing tokens and the read loop
+                // unwinds cleanly.
+                if (callbacks.shouldStop) {
+                    const nowMs = Date.now();
+                    if (nowMs - lastStopCheckMs > 1000) {
+                        lastStopCheckMs = nowMs;
+                        if (await callbacks.shouldStop()) {
+                            stoppedMidPhase = true;
+                            try { upstreamController.abort(); } catch {}
+                            try { await reader.cancel(); } catch {}
+                            break;
                         }
                     }
-                } catch {
-                    /* ignore partial / non-JSON lines */
+                }
+
+                // Live phase tagging — keep newly-written assistant rows tagged
+                // with this phase's metadata so the chat divider renders during
+                // the stream, not just after the phase finishes. Fire-and-forget
+                // so we don't add latency to the read loop.
+                {
+                    const nowMs = Date.now();
+                    if (nowMs - lastTagMs > 2000) {
+                        lastTagMs = nowMs;
+                        void tagPhaseRows();
+                    }
+                }
+
+                parseBuf += decoder.decode(value, { stream: true });
+                const events = parseBuf.split("\n\n");
+                parseBuf = events.pop() || "";
+                for (const ev of events) {
+                    if (!ev.startsWith("data: ")) continue;
+                    const json = ev.slice(6).trim();
+                    if (!json || json === "[DONE]") continue;
+                    try {
+                        const obj = JSON.parse(json);
+                        if (obj.type === "token" || obj.type === "content") {
+                            phaseText += obj.content || obj.token || "";
+                        } else if (obj.type === "final" || obj.type === "complete") {
+                            if (typeof obj.content === "string" && obj.content.length > phaseText.length) {
+                                phaseText = obj.content;
+                            }
+                        }
+                    } catch {
+                        /* ignore partial / non-JSON lines */
+                    }
                 }
             }
+        } catch (readErr: any) {
+            // Network drop / agent crash mid-stream. Capture, exit the loop
+            // gracefully, and let the post-loop logic continue to the next
+            // phase rather than crashing the whole pipeline.
+            streamError = readErr;
+            console.error(`[phase-pipeline] phase ${phaseMeta.index} read loop crashed:`, readErr);
         }
 
         // If the user stopped mid-phase, exit immediately without further
         // tagging or accumulating. The runner will mark status='stopped'.
         if (stoppedMidPhase) {
             return { stopped: true, failed: false, lastPhase: phaseMeta, finalText };
+        }
+
+        // Mid-stream read failure → surface as an error event, skip text
+        // accumulation, and move to the next phase. The chat / row will
+        // show the error but the pipeline keeps going.
+        if (streamError) {
+            const msg = `Phase ${phaseMeta.index} stream interrupted: ${(streamError as any)?.message || streamError}`;
+            await callbacks.onError?.(msg, phaseMeta);
+            await callbacks.onPhaseEnd?.(phaseMeta, "");
+            lastPhase = phaseMeta;
+            continue;
         }
 
         // Skip phases that produced no visible text (the agent might have

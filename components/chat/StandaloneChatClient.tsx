@@ -3,14 +3,22 @@
 import { useEffect, useState, useRef } from "react";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 
+interface PhaseBoundary {
+    position: number;
+    name: string | null;
+    model_id: string | null;
+    after_ms: number;
+}
+
 interface StandaloneChatClientProps {
     projectId: string | null;
     chatId: string;
     initialMessages: any[];
     automationTaskId?: string | null;
+    phaseBoundaries?: PhaseBoundary[];
 }
 
-export function StandaloneChatClient({ projectId, chatId, initialMessages, automationTaskId }: StandaloneChatClientProps) {
+export function StandaloneChatClient({ projectId, chatId, initialMessages, automationTaskId, phaseBoundaries }: StandaloneChatClientProps) {
     const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
     const [initialModel, setInitialModel] = useState<string | undefined>(undefined);
     const [initialImages, setInitialImages] = useState<string[] | undefined>(undefined);
@@ -55,6 +63,7 @@ export function StandaloneChatClient({ projectId, chatId, initialMessages, autom
             initialModel={initialModel}
             initialImages={initialImages}
             automationTaskId={automationTaskId}
+            phaseBoundaries={phaseBoundaries}
         />
     );
 }

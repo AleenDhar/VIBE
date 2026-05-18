@@ -7,6 +7,7 @@ import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, 
 import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { TodoListRenderer, isTodoMessage } from "@/components/chat/TodoListRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
@@ -28,9 +29,21 @@ interface ChatProps {
     // Optional — passed when this chat was created by an automation task.
     // Enables the per-phase rerun button beside each phase divider.
     automationTaskId?: string | null;
+    // When the chat is backed by an automation task, the chat page passes
+    // pre-computed phase boundaries (position/name/model_id + after_ms
+    // cutoff timestamp). Used to assign each message to its phase by
+    // created_at rather than relying on chat_messages.metadata.phase,
+    // which Replit only tags at phase END. This makes the divider render
+    // correctly DURING streaming, not just after a phase completes.
+    phaseBoundaries?: Array<{
+        position: number;
+        name: string | null;
+        model_id: string | null;
+        after_ms: number;
+    }>;
 }
 
-export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages, automationTaskId }: ChatProps) {
+export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages, automationTaskId, phaseBoundaries }: ChatProps) {
     // Process initial messages - group thinking/tool steps with final messages
     const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
@@ -117,8 +130,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         lastMsg.content = (lastMsg.content || "") + "\n\n*[Task Cancelled]*";
                         lastMsg.isProcessing = false;
                     }
+                    return acc;
                 }
-                return acc; // skip status bubbles
+                // Phase markers from Replit (phase_start, pipeline_complete)
+                // are intentionally dropped here — the client-side
+                // phaseBoundaries logic (in the renderer) positions dividers
+                // by content created_at, which is more accurate than the
+                // marker timing AND avoids stacking duplicates.
+                return acc;
             } else if (type === 'final' || type === 'message') {
                 if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content) {
                     lastMsg.content = msg.content || "";
@@ -507,6 +526,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         };
                                     });
                                 }
+                                // Replit phase markers are dropped — the
+                                // client-side phaseBoundaries logic handles
+                                // divider positioning more accurately by
+                                // content timing. We still listen for
+                                // pipeline_complete to stop the spinner.
+                                const rtStatusMeta = typeof newMsg.metadata === 'string'
+                                    ? (() => { try { return JSON.parse(newMsg.metadata) || {}; } catch { return {}; } })()
+                                    : (newMsg.metadata || {});
+                                if (rtStatusMeta?.kind === 'pipeline_complete') {
+                                    setLoading(false);
+                                    setThinkingText("");
+                                    return prev;
+                                }
+                                // Suppress generic phase_start markers — no UI side-effect needed.
+                                if (rtStatusMeta?.kind === 'phase_start') {
+                                    return prev;
+                                }
+                                // Legacy generic status — just update the thinking text.
                                 setThinkingText(newMsg.content || "Processing...");
                                 return prev;
                             } else if (messageType === 'cancelled') {
@@ -1260,16 +1297,65 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         <p>How can I help you today?</p>
                     </div>
                 )}
-                {messages
-                    .filter(msg => {
-                        // Hide assistant messages that are processing with no content AND no thinking steps
-                        // If they have thinking steps, we want to show them so the user can see the progress
+                {(() => {
+                    // Extract filtered list once so we can pre-compute the
+                    // index of the LAST message containing a todos step.
+                    // We render the todos card only in that message — every
+                    // earlier todos card is hidden, leaving a single "live"
+                    // card that always shows the most recent counts.
+                    const filteredRaw = messages.filter(msg => {
                         if (msg.role === 'assistant' && msg.isProcessing && !msg.content?.trim() && (!msg.thinkingSteps || msg.thinkingSteps.length === 0)) {
                             return false;
                         }
                         return true;
-                    })
-                    .map((msg, i) => {
+                    });
+
+                    // If phaseBoundaries are provided (automation chat),
+                    // assign each assistant message to its phase by created_at
+                    // — bypasses the need for Replit to tag chat_messages.metadata
+                    // for the divider to render. Mirrors how the automation
+                    // table groups phases by completed_at timestamps.
+                    const totalPhases = phaseBoundaries?.length ?? 0;
+                    const filteredMessages = (!phaseBoundaries || phaseBoundaries.length === 0)
+                        ? filteredRaw
+                        : filteredRaw.map(msg => {
+                            if (msg.role !== 'assistant') return msg;
+                            // If Replit already tagged this row, respect it.
+                            if (msg.metadata?.phase?.position) return msg;
+                            const t = new Date(msg.created_at || 0).getTime();
+                            // Find the highest-position phase whose after_ms <= t.
+                            let assigned: typeof phaseBoundaries[number] | null = null;
+                            for (const b of phaseBoundaries) {
+                                if (t >= b.after_ms) assigned = b;
+                            }
+                            if (!assigned) return msg;
+                            return {
+                                ...msg,
+                                metadata: {
+                                    ...(msg.metadata || {}),
+                                    phase: {
+                                        index: assigned.position,
+                                        total: totalPhases,
+                                        position: assigned.position,
+                                        name: assigned.name,
+                                        model_id: assigned.model_id,
+                                    },
+                                },
+                            };
+                        });
+                    let lastTodoMsgIndex = -1;
+                    filteredMessages.forEach((m, mi) => {
+                        if (m.thinkingSteps?.some((s: any) => {
+                            const c = typeof s === 'string' ? s : s.content;
+                            return typeof c === 'string' && isTodoMessage(c);
+                        })) {
+                            lastTodoMsgIndex = mi;
+                        }
+                    });
+                    return filteredMessages.map((msg, i) => {
+                        // Hoisted into the closure so the per-step todo render
+                        // can check whether THIS message is the "last todo" one.
+                        const isLastTodoMessage = i === lastTodoMsgIndex;
                         const msgType = msg.type || 'message';
 
                         // verifier_report: standalone verdict bubble (passed = green, failed = amber)
@@ -1345,9 +1431,35 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         // divider repeats above every chat_message row a
                         // phase produced (thinking, tool_call, tool_result,
                         // content), which is several per phase.
-                        const prevMsg = i > 0 ? messages[i - 1] : null;
+                        const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
                         const prevPhasePosition = prevMsg?.metadata?.phase?.position ?? null;
                         const showPhaseDivider = phaseInfo && phaseInfo.position !== prevPhasePosition;
+                        // Phase-start markers from Replit are empty-body rows
+                        // that exist ONLY to trigger the divider. Render the
+                        // divider and skip the (empty) bubble + avatar.
+                        const isPhaseMarker = msg.metadata?.kind === 'phase_start';
+                        if (isPhaseMarker) {
+                            const heading = phaseInfo
+                                ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
+                                : null;
+                            const subtitle = phaseInfo?.model_id || null;
+                            return (
+                                <Fragment key={i}>
+                                    {heading && (
+                                        <div className="flex items-center gap-3 mx-auto w-full max-w-3xl pt-4 pb-1 select-none">
+                                            <div className="h-px flex-1 bg-border/60" />
+                                            <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
+                                                <span className="text-xs font-semibold tracking-wide text-foreground/80">{heading}</span>
+                                                {subtitle && (
+                                                    <span className="text-[10px] text-muted-foreground/60 font-mono">{subtitle}</span>
+                                                )}
+                                            </div>
+                                            <div className="h-px flex-1 bg-border/60" />
+                                        </div>
+                                    )}
+                                </Fragment>
+                            );
+                        }
                         const phaseHeading = showPhaseDivider
                             ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
                             : null;
@@ -1548,6 +1660,35 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                             // longer / markdown-containing content gets full ReactMarkdown.
                                                             const looksLikeMarkdown = /[#*|>\-`\[\]!]/.test(content) || content.length > 120;
 
+                                                            // Render the agent's write_todos output as a styled
+                                                            // checklist instead of raw text.
+                                                            //
+                                                            // Only ONE Todos card renders per chat — the most recent
+                                                            // one. We skip todos in any message that isn't the global
+                                                            // last todo-containing message (pre-computed above), then
+                                                            // within that message we skip everything except the very
+                                                            // last todo step (so two adjacent emits — summary + full
+                                                            // list — don't both show).
+                                                            if (isTodoMessage(content)) {
+                                                                if (!isLastTodoMessage) {
+                                                                    return null;
+                                                                }
+                                                                // Within the last-todo message, only the final todo step renders.
+                                                                const hasLaterTodoInThisMsg = groups.slice(idx + 1).some((g: any) => {
+                                                                    if (!g || g.type === 'tool_group') return false;
+                                                                    const c = typeof g === 'string' ? g : g.content;
+                                                                    return typeof c === 'string' && isTodoMessage(c);
+                                                                });
+                                                                if (hasLaterTodoInThisMsg) {
+                                                                    return null;
+                                                                }
+                                                                return (
+                                                                    <div key={idx} className="mb-2">
+                                                                        <TodoListRenderer content={content} />
+                                                                    </div>
+                                                                );
+                                                            }
+
                                                             if (isAgentReasoning || looksLikeMarkdown) {
                                                                 return (
                                                                     <div key={idx} className="thinking-md-block text-foreground/90 mb-3 leading-relaxed border-l-2 border-muted-foreground/20 pl-3">
@@ -1567,7 +1708,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                             )}
 
                                             {displayContent && !isDuplicateOfThinkingStep && (
-                                                <MarkdownContent content={displayContent} />
+                                                isTodoMessage(displayContent)
+                                                    ? <TodoListRenderer content={displayContent} />
+                                                    : <MarkdownContent content={displayContent} />
                                             )}
 
                                             {(msg.isProcessing || (loading && i === messages.length - 1)) && (
@@ -1664,7 +1807,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         )}
                         </Fragment>
                         );
-                    })}
+                    });
+                })()}
 
                 {/* Global "Thinking..." indicator - only show if we don't have a visible assistant message yet */}
                 {loading && (() => {

@@ -9,11 +9,10 @@
 import { createClient } from "@/lib/supabase/server";
 import {
     buildPipelineContext,
-    runPhasePipeline,
     validatePhaseModels,
     type Phase,
-    type PhaseMeta,
 } from "@/lib/phase-pipeline";
+import { dispatchPipeline, type DispatchPriorPhaseOutput } from "@/lib/dispatch-pipeline";
 
 interface RunOutcome {
     ok: boolean;
@@ -177,110 +176,35 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
         includeLegacyProjectPrompt: false, // phases always exist here
     });
 
-    // 7. Run the phase pipeline with progress callbacks.
-    let lastPhase: PhaseMeta | undefined;
-    let collectedError: string | undefined;
+    // 7. Dispatch the pipeline to Replit's /api/run-pipeline endpoint.
+    // Replit runs the loop in the background and writes chat_messages +
+    // updates automation_tasks (last_phase_*, phase_outputs, status) as
+    // each phase completes. We don't await execution here — only the
+    // initial dispatch call.
+    //
+    // The stale-task sweep in listTasks (2-min updated_at threshold)
+    // catches truly-dead pipelines. Replit's per-phase markTask writes
+    // bump updated_at naturally, so a live pipeline is never reaped.
     const messagesPayload = [{ role: "user", content: task.prompt || "" }];
 
-    // Heartbeat — bumps updated_at on the task every 10s so the stale-task
-    // sweep in listTasks can tell whether the runner is alive. Without this,
-    // long phases (no markTask call for minutes) look identical to a crashed
-    // runner and get reaped prematurely.
-    const heartbeat = setInterval(() => {
-        // Fire-and-forget; trigger overwrites updated_at to now() on any UPDATE.
-        supabase
-            .from("automation_tasks")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", taskId)
-            .then(() => {}, () => {});
-    }, 10000);
+    const dispatch = await dispatchPipeline({
+        chatId,
+        projectId,
+        sharedSystemPrefix,
+        messages: messagesPayload,
+        phases,
+        apiKeys,
+        agentChatUrl: agentApiUrl,
+        taskId,
+    });
 
-    let result;
-    try {
-        result = await runPhasePipeline(
-        {
-            supabase,
-            chatId,
-            projectId,
-            sharedSystemPrefix,
-            messagesPayload,
-            phases,
-            apiKeys,
-            agentApiUrl,
-        },
-        {
-            onPhaseStart: async (phase) => {
-                lastPhase = phase;
-                await markTask(supabase, taskId, {
-                    last_phase_index: phase.index,
-                    last_phase_total: phase.total,
-                    last_phase_name: phase.name,
-                });
-            },
-            onPhaseEnd: async (phase, accumulatedText) => {
-                lastPhase = phase;
-                // Append this phase's output to the task's phase_outputs
-                // array. Read-modify-write — fine since a single task only
-                // ever runs one pipeline at a time.
-                const { data: current } = await supabase
-                    .from("automation_tasks")
-                    .select("phase_outputs")
-                    .eq("id", taskId)
-                    .maybeSingle();
-                const prior = Array.isArray(current?.phase_outputs) ? current!.phase_outputs : [];
-                const nextOutputs = [...prior, {
-                    phase_index: phase.index,
-                    phase_position: phase.position,
-                    phase_name: phase.name,
-                    phase_model_id: phase.model_id,
-                    content: accumulatedText,
-                    completed_at: new Date().toISOString(),
-                }];
-                await markTask(supabase, taskId, {
-                    last_phase_index: phase.index,
-                    last_phase_total: phase.total,
-                    last_phase_name: phase.name,
-                    phase_outputs: nextOutputs,
-                });
-            },
-            onError: (msg) => {
-                collectedError = msg;
-            },
-            shouldStop: async () => {
-                const { data } = await supabase
-                    .from("automation_tasks")
-                    .select("stop_requested")
-                    .eq("id", taskId)
-                    .maybeSingle();
-                return !!data?.stop_requested;
-            },
-        }
-    );
-    } finally {
-        clearInterval(heartbeat);
-    }
-
-    // 8. Finalize.
-    const finishedAt = new Date().toISOString();
-    if (result.stopped) {
-        await markTask(supabase, taskId, {
-            status: "stopped",
-            completed_at: finishedAt,
-        });
-    } else if (result.failed) {
+    if (!dispatch.ok) {
         await markTask(supabase, taskId, {
             status: "failed",
-            error: result.error || collectedError || "Pipeline failed",
-            completed_at: finishedAt,
+            error: `Failed to dispatch pipeline: ${dispatch.error}`,
+            completed_at: new Date().toISOString(),
         });
-    } else {
-        await markTask(supabase, taskId, {
-            status: "completed",
-            completed_at: finishedAt,
-            last_phase_index: lastPhase?.index ?? null,
-            last_phase_total: lastPhase?.total ?? phases.length,
-            last_phase_name: lastPhase?.name ?? null,
-        });
+        return { ok: false, error: dispatch.error };
     }
 
     return { ok: true, chatId };
@@ -472,102 +396,45 @@ export async function runAutomationTaskPhase(
         includeLegacyProjectPrompt: false,
     });
 
-    // 7. Run the target phase + every phase after it. Same heartbeat as the
-    // full-pipeline runner so listTasks can tell this rerun is alive.
+    // 7. Dispatch the partial pipeline to Replit. Replit pre-seeds its
+    // accumulator with priorOutputs so the rerun phase sees Phase 1..N-1
+    // in its system prompt's Prior Phase Outputs block, then runs the
+    // target phase plus every phase after it.
     const messagesPayload = [{ role: "user", content: task.prompt || "" }];
-    let rerunPhase: PhaseMeta | undefined;
 
-    const heartbeat = setInterval(() => {
-        supabase
-            .from("automation_tasks")
-            .update({ updated_at: new Date().toISOString() })
-            .eq("id", taskId)
-            .then(() => {}, () => {});
-    }, 10000);
-
-    let result;
-    try {
-        result = await runPhasePipeline(
-        {
-            supabase,
-            chatId,
-            projectId,
-            sharedSystemPrefix,
-            messagesPayload,
-            phases: phasesToRun,
-            apiKeys,
-            agentApiUrl,
-            totalPhases: allPhases.length,
-            priorPhaseOutputs: priorOutputs,
+    // Shape priorOutputs to match the dispatch helper's contract.
+    // priorOutputs was built with `(o: any)` filters above so its element
+    // type is `any` — annotate explicitly here.
+    const dispatchPriorOutputs: DispatchPriorPhaseOutput[] = priorOutputs.map((o: any) => ({
+        phase: {
+            index: o.phase.index,
+            total: o.phase.total,
+            position: o.phase.position,
+            name: o.phase.name,
+            model_id: o.phase.model_id,
         },
-        {
-            onPhaseStart: async (phase) => {
-                rerunPhase = phase;
-                await markTask(supabase, taskId, {
-                    last_phase_index: phase.index,
-                    last_phase_total: phase.total,
-                    last_phase_name: phase.name,
-                });
-            },
-            onPhaseEnd: async (phase, accumulatedText) => {
-                rerunPhase = phase;
-                // Replace this phase's entry in phase_outputs (or append).
-                const { data: cur } = await supabase
-                    .from("automation_tasks")
-                    .select("phase_outputs")
-                    .eq("id", taskId)
-                    .maybeSingle();
-                const prior = Array.isArray(cur?.phase_outputs) ? cur!.phase_outputs : [];
-                const filtered = prior.filter((o: any) => o.phase_position !== phase.position);
-                const newEntry = {
-                    phase_index: phase.index,
-                    phase_position: phase.position,
-                    phase_name: phase.name,
-                    phase_model_id: phase.model_id,
-                    content: accumulatedText,
-                    completed_at: new Date().toISOString(),
-                };
-                const merged = [...filtered, newEntry]
-                    .sort((a: any, b: any) => a.phase_position - b.phase_position);
-                await markTask(supabase, taskId, {
-                    last_phase_index: phase.index,
-                    last_phase_total: phase.total,
-                    last_phase_name: phase.name,
-                    phase_outputs: merged,
-                });
-            },
-            shouldStop: async () => {
-                const { data } = await supabase
-                    .from("automation_tasks")
-                    .select("stop_requested")
-                    .eq("id", taskId)
-                    .maybeSingle();
-                return !!data?.stop_requested;
-            },
-        }
-    );
-    } finally {
-        clearInterval(heartbeat);
-    }
+        content: o.content,
+    }));
 
-    const finishedAt = new Date().toISOString();
-    if (result.stopped) {
-        await markTask(supabase, taskId, { status: "stopped", completed_at: finishedAt });
-    } else if (result.failed) {
+    const dispatch = await dispatchPipeline({
+        chatId,
+        projectId,
+        sharedSystemPrefix,
+        messages: messagesPayload,
+        phases: phasesToRun,
+        apiKeys,
+        agentChatUrl: agentApiUrl,
+        priorPhaseOutputs: dispatchPriorOutputs,
+        taskId,
+    });
+
+    if (!dispatch.ok) {
         await markTask(supabase, taskId, {
             status: "failed",
-            error: result.error || "Phase rerun failed",
-            completed_at: finishedAt,
+            error: `Failed to dispatch phase rerun: ${dispatch.error}`,
+            completed_at: new Date().toISOString(),
         });
-    } else {
-        const finalPhase = phasesToRun[phasesToRun.length - 1];
-        await markTask(supabase, taskId, {
-            status: "completed",
-            completed_at: finishedAt,
-            last_phase_index: rerunPhase?.index ?? finalPhase.position,
-            last_phase_total: rerunPhase?.total ?? allPhases.length,
-            last_phase_name: rerunPhase?.name ?? finalPhase.name,
-        });
+        return { ok: false, error: dispatch.error };
     }
 
     return { ok: true, chatId };

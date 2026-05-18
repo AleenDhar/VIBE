@@ -783,15 +783,12 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                             // full pipeline has run at least once). Without a chat
                                             // there's nothing to rerun against.
                                             const canRerun = canEdit && !isRunning && !!task.chat_id;
-                                            // Per-phase cost estimate: total chat cost split
-                                            // across phases by output length. Approximate — agent
-                                            // server only tracks cost at the chat level.
-                                            const chatTotalCost = task.chat_id ? (chatCosts[task.chat_id] ?? null) : null;
-                                            const totalOutputLen = (task.phase_outputs || [])
-                                                .reduce((sum, o) => sum + (o.content?.length || 0), 0);
-                                            const phaseCostEstimate = (output && chatTotalCost !== null && totalOutputLen > 0)
-                                                ? chatTotalCost * ((output.content?.length || 0) / totalOutputLen)
-                                                : null;
+                                            // Real per-phase cost + tokens from the Replit
+                                            // orchestrator (chat_usage deltas, not an estimate).
+                                            // Fall back to no badge if missing (old rows
+                                            // pre-dating the backend change).
+                                            const phaseCost = typeof output?.cost_usd === "number" ? output.cost_usd : null;
+                                            const phaseTokens = typeof output?.total_tokens === "number" ? output.total_tokens : null;
 
                                             return (
                                                 <td
@@ -840,12 +837,26 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                                                 {formatModelName(output.phase_model_id)}
                                                                             </span>
                                                                         )}
-                                                                        {phaseCostEstimate !== null && (
+                                                                        {phaseCost !== null && (
                                                                             <span
                                                                                 className="text-[10px] text-emerald-700 dark:text-emerald-400 font-mono"
-                                                                                title={`~ estimated share of chat cost ($${chatTotalCost?.toFixed(4)} total) by output length`}
+                                                                                title={
+                                                                                    phaseTokens !== null
+                                                                                        ? `Real per-phase cost (chat_usage delta) — ${phaseTokens.toLocaleString()} tokens`
+                                                                                        : "Real per-phase cost (chat_usage delta)"
+                                                                                }
                                                                             >
-                                                                                ~ ${phaseCostEstimate.toFixed(4)}
+                                                                                ${phaseCost.toFixed(4)}
+                                                                            </span>
+                                                                        )}
+                                                                        {phaseTokens !== null && (
+                                                                            <span
+                                                                                className="text-[10px] text-muted-foreground/60 font-mono"
+                                                                                title={`${phaseTokens.toLocaleString()} tokens (input + output) for this phase`}
+                                                                            >
+                                                                                {phaseTokens >= 1000
+                                                                                    ? `${(phaseTokens / 1000).toFixed(1)}k tok`
+                                                                                    : `${phaseTokens} tok`}
                                                                             </span>
                                                                         )}
                                                                     </div>
@@ -877,9 +888,14 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                 {task.status}
                                             </span>
                                             {task.error && (
-                                                <div className="text-[10px] text-rose-500 mt-1 line-clamp-2" title={task.error}>
-                                                    {task.error}
-                                                </div>
+                                                <details className="mt-1 group">
+                                                    <summary className="text-[10px] text-rose-500 cursor-pointer line-clamp-2 group-open:line-clamp-none whitespace-pre-wrap break-words">
+                                                        {task.error}
+                                                    </summary>
+                                                    <pre className="text-[10px] text-rose-400/80 whitespace-pre-wrap break-words mt-1 bg-rose-500/5 border border-rose-500/20 rounded p-2 max-h-64 overflow-y-auto font-mono">
+                                                        {task.error}
+                                                    </pre>
+                                                </details>
                                             )}
                                         </td>
                                         <td className="px-3 py-2 align-top text-xs text-muted-foreground">

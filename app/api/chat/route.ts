@@ -4,10 +4,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { computeTodaySpend } from "@/lib/spend-check";
 import {
     buildPipelineContext,
-    runPhasePipeline,
     validatePhaseModels,
     type Phase,
 } from "@/lib/phase-pipeline";
+import { dispatchPipeline } from "@/lib/dispatch-pipeline";
 
 export const dynamic = 'force-dynamic';
 
@@ -319,88 +319,57 @@ Please use this context to personalize your responses.`;
             });
         }
 
-        // ── Phase pipeline path ────────────────────────────────────────
-        // Delegates to lib/phase-pipeline.ts. Same module powers the
-        // automation runner so chat and batch executions share an identical
-        // pipeline.
+        // ── Phase pipeline path — DELEGATED TO REPLIT ──────────────────
+        // The pipeline orchestration now runs on Replit's /api/run-pipeline
+        // endpoint because Vercel serverless functions die at 60s/300s and
+        // a 6-phase ABM run easily exceeds that. Vercel's job here is just
+        // to assemble the payload, validate models, kick off the run, and
+        // return a tiny SSE "started" response. Replit writes chat_messages
+        // directly to Supabase as each phase produces output; the chat UI
+        // already uses Supabase Realtime to render new rows live.
         const validation = await validatePhaseModels(supabase, projectPhases as Phase[], allowedModels);
         if (validation.ok === false) {
             return NextResponse.json({ error: validation.error }, { status: validation.status });
         }
 
+        const dispatch = await dispatchPipeline({
+            chatId,
+            projectId: finalProjectId!,
+            sharedSystemPrefix: systemPrompt,
+            messages: messagesPayload,
+            phases: projectPhases as Phase[],
+            apiKeys,
+            // Replit calls back into the agent's own /api/chat for each
+            // phase; this URL is the same one Vercel was hitting before.
+            agentChatUrl: agentApiUrl,
+        });
+
         const encoder = new TextEncoder();
         const sseEvent = (obj: unknown) => encoder.encode(`data: ${JSON.stringify(obj)}\n\n`);
 
+        // Return a tiny SSE stream so the existing client-side parser
+        // doesn't break — it reads `data: ...` lines and stops at [DONE].
+        // The actual phase output streams via Supabase Realtime, not here.
         const stream = new ReadableStream({
-            async start(controller) {
-                // Track whether the client is still connected. Once the
-                // browser disconnects (closed tab, hot-reload, idle timeout),
-                // every controller.enqueue call throws. Previously that
-                // exception bubbled up through runPhasePipeline's read loop,
-                // crashed the pipeline mid-phase, skipped tagging for the
-                // current phase, and skipped any remaining phases entirely —
-                // even though the agent server's stream was still firing
-                // chat_messages rows server-side. The user would reload the
-                // page and see a chat that "stopped after phase N" with
-                // dozens of untagged orphan rows.
-                //
-                // Wrap each enqueue in try/catch and flip a `clientGone`
-                // flag on first failure. After that, callbacks become
-                // no-ops so the pipeline keeps running to completion on the
-                // server — agent finishes, every phase runs, every row gets
-                // tagged. The user reloads and sees everything.
-                let clientGone = false;
-                const safeEnqueue = (chunk: Uint8Array) => {
-                    if (clientGone) return;
-                    try {
-                        controller.enqueue(chunk);
-                    } catch {
-                        clientGone = true;
-                    }
-                };
-                try {
-                    const result = await runPhasePipeline(
-                        {
-                            supabase,
-                            chatId,
-                            projectId: finalProjectId!,
-                            sharedSystemPrefix: systemPrompt,
-                            messagesPayload,
-                            phases: projectPhases as Phase[],
-                            apiKeys,
-                            agentApiUrl,
-                        },
-                        {
-                            onPhaseStart: (phase) => {
-                                safeEnqueue(sseEvent({ type: "phase_start", phase }));
-                            },
-                            onPhaseChunk: (bytes) => {
-                                safeEnqueue(bytes);
-                            },
-                            onPhaseEnd: (phase) => {
-                                safeEnqueue(sseEvent({ type: "phase_end", phase }));
-                            },
-                            onError: (message) => {
-                                safeEnqueue(sseEvent({ type: "error", content: message }));
-                            },
-                        }
-                    );
-                    if (result.failed && result.error) {
-                        // onError already enqueued — nothing extra to do.
-                    }
-                    safeEnqueue(encoder.encode("data: [DONE]\n\n"));
-                    try { controller.close(); } catch {}
-                } catch (err: any) {
-                    console.error("[API] Phase pipeline error:", err);
-                    safeEnqueue(sseEvent({ type: "error", content: err?.message || "Pipeline error" }));
-                    try { controller.close(); } catch {}
+            start(controller) {
+                if (dispatch.ok) {
+                    controller.enqueue(sseEvent({
+                        type: "status",
+                        content: "Pipeline started — output will stream live as each phase runs.",
+                    }));
+                } else if (dispatch.alreadyRunning) {
+                    controller.enqueue(sseEvent({
+                        type: "status",
+                        content: "Pipeline already running for this chat — watch live updates.",
+                    }));
+                } else {
+                    controller.enqueue(sseEvent({
+                        type: "error",
+                        content: dispatch.error || "Failed to start pipeline",
+                    }));
                 }
-            },
-            cancel() {
-                // Client disconnected. The pipeline keeps running on the
-                // server (safeEnqueue swallows the resulting errors) so the
-                // agent's work finishes and every phase gets tagged. User
-                // can reload to see the full chat.
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                try { controller.close(); } catch {}
             },
         });
 

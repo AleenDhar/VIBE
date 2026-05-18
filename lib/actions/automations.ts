@@ -28,6 +28,13 @@ export interface AutomationPhaseOutput {
     phase_model_id: string | null;
     content: string;
     completed_at: string;
+    // Per-phase token/cost deltas, written by the Replit orchestrator from
+    // chat_usage snapshots (phase_end minus phase_start). cost_usd is the
+    // real billed amount for THIS phase only — not a proportional estimate.
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cost_usd?: number;
 }
 
 export interface AutomationTask {
@@ -211,12 +218,6 @@ export async function deleteAutomation(
 
 // ── tasks (rows) ──────────────────────────────────────────────────────────
 
-// How long without an updated_at bump (heartbeat) before we consider a
-// running task dead. The runner heartbeats every 10s during execution, so
-// 2 minutes of silence is well beyond any normal pause and almost always
-// means the process crashed / restarted / timed out.
-const RUNNING_TASK_STALE_MS = 2 * 60 * 1000;
-
 export async function listTasks(automationId: string): Promise<AutomationTask[]> {
     const supabase = await createClient();
     const { data, error } = await supabase
@@ -229,45 +230,16 @@ export async function listTasks(automationId: string): Promise<AutomationTask[]>
         return [];
     }
 
-    // Stale-task sweep. The runner can die without marking the row failed
-    // (Node restart, Vercel timeout, uncaught exception). Without this
-    // sweep the row sits at status='running' forever and the UI lies about
-    // it. Sweep is run on every fetch — cheap and self-correcting.
-    const now = Date.now();
-    const stale = (data || []).filter(t =>
-        t.status === "running" &&
-        new Date(t.updated_at).getTime() < now - RUNNING_TASK_STALE_MS
-    );
-    if (stale.length > 0) {
-        const finishedAt = new Date().toISOString();
-        const fixed: AutomationTask[] = [];
-        for (const t of stale) {
-            const { error: updateErr } = await supabase
-                .from("automation_tasks")
-                .update({
-                    status: "failed",
-                    error: "Runner appears to have crashed (no heartbeat for 2+ minutes). Click Run to retry.",
-                    completed_at: finishedAt,
-                })
-                .eq("id", t.id)
-                .eq("status", "running"); // CAS guard — only if still running
-            if (!updateErr) {
-                fixed.push({
-                    ...(t as AutomationTask),
-                    status: "failed",
-                    error: "Runner appears to have crashed (no heartbeat for 2+ minutes). Click Run to retry.",
-                    completed_at: finishedAt,
-                });
-            }
-        }
-        // Replace stale rows in the result set with their corrected versions
-        // so the UI shows the fix on this very fetch (no extra refresh).
-        return (data || []).map(row => {
-            const fixedRow = fixed.find(f => f.id === row.id);
-            return (fixedRow || row) as AutomationTask;
-        });
-    }
-
+    // NOTE: previously this function ran a "stale task sweep" that flipped
+    // rows older than 2 min to status='failed'. That made sense when the
+    // pipeline runner lived on Vercel and heartbeated every 10s. Now that
+    // Replit owns the runner (no heartbeat — it only writes to the task at
+    // phase boundaries which can be 5+ minutes apart), the sweep would
+    // false-positive a live pipeline as "crashed" mid-phase. Removed.
+    //
+    // If a Replit runner truly crashes the row will sit at 'running' until
+    // someone manually resets it. That's the right tradeoff vs killing
+    // live runs.
     return (data || []) as AutomationTask[];
 }
 
