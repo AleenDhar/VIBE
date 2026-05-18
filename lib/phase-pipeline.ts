@@ -180,7 +180,20 @@ export async function runPhasePipeline(
 ): Promise<PipelineResult> {
     const { supabase, chatId, projectId, sharedSystemPrefix, messagesPayload, phases, apiKeys, agentApiUrl } = input;
     const totalPhases = phases.length;
-    const accumulatedPhaseOutputs: { role: "assistant"; content: string }[] = [];
+    // Prior-phase outputs are now embedded into the next phase's SYSTEM
+    // PROMPT instead of being appended to the messages array. Two reasons:
+    //   1. Newer Anthropic models (Sonnet 4.6/4.7, Opus 4.7) refuse a
+    //      messages array that ends with an assistant turn — they interpret
+    //      it as "prefill" and respond with: "This model does not support
+    //      assistant message prefill. The conversation must end with a user
+    //      message." Phase 2+ would always hit this with the old design.
+    //   2. The Python agent server applies cache_control to every message
+    //      block; if a phase wrote no text (only tool calls), the resulting
+    //      empty assistant content block triggered:
+    //      "cache_control cannot be set for empty text blocks."
+    // Embedding outputs into the system prompt sidesteps both issues and
+    // keeps the messages array always ending with the user's message.
+    const accumulatedPhaseOutputs: { phase: PhaseMeta; content: string }[] = [];
     let lastPhase: PhaseMeta | undefined;
     let finalText = "";
 
@@ -207,12 +220,26 @@ export async function runPhasePipeline(
 
         await callbacks.onPhaseStart?.(phaseMeta);
 
+        // Build a "## Prior Phase Outputs" block summarising what previous
+        // phases produced, then append phase-specific instructions + pipeline
+        // context. messagesPayload is sent untouched so it always ends with
+        // the original user message (avoids the assistant-prefill error).
+        const priorOutputsBlock = accumulatedPhaseOutputs.length === 0
+            ? ""
+            : "\n\n## Prior Phase Outputs\nThe following are the outputs each earlier phase produced for THIS turn. Treat them as authoritative work already done — do not redo it. Build on it.\n\n" +
+              accumulatedPhaseOutputs.map(({ phase: p, content }) =>
+                  `### Phase ${p.index} of ${p.total}${p.name ? ` — ${p.name}` : ""} (${p.model_id})\n${content}`
+              ).join("\n\n---\n\n");
+
         const phaseSystemPrompt =
             sharedSystemPrefix +
+            priorOutputsBlock +
             `\n\n## Phase Instructions (Phase ${phaseMeta.index} of ${totalPhases}${phase.name ? ` — ${phase.name}` : ""})\n${phase.system_prompt || "(no phase-specific instructions provided)"}` +
-            `\n\n## Pipeline Context\nYou are phase ${phaseMeta.index} of ${totalPhases} in this project's pipeline. The conversation history above contains the user's message and (if any) the outputs of prior phases as prior assistant turns. Build on top of that work: do not repeat what's already been done — perform the task described in your Phase Instructions, then hand off to the next phase.`;
+            `\n\n## Pipeline Context\nYou are phase ${phaseMeta.index} of ${totalPhases} in this project's pipeline. The user's original message is the last turn in the conversation; any prior phase outputs from this turn are summarised in the "Prior Phase Outputs" section above. Build on top of that work: do not repeat what's already been done — perform the task described in your Phase Instructions, then hand off to the next phase.`;
 
-        const phaseMessages = [...messagesPayload, ...accumulatedPhaseOutputs];
+        // Messages stays exactly as the caller built it (ends in user). Prior
+        // phase outputs are above in the system prompt, not here.
+        const phaseMessages = messagesPayload;
 
         const phasePayload = {
             messages: phaseMessages,
@@ -281,8 +308,15 @@ export async function runPhasePipeline(
             }
         }
 
-        accumulatedPhaseOutputs.push({ role: "assistant", content: phaseText });
-        finalText = phaseText;
+        // Skip phases that produced no visible text (the agent might have
+        // only emitted tool calls and tool results). Including an empty
+        // assistant block in subsequent payloads previously triggered
+        // "cache_control cannot be set for empty text blocks" on every
+        // downstream phase call.
+        if (phaseText.trim().length > 0) {
+            accumulatedPhaseOutputs.push({ phase: phaseMeta, content: phaseText });
+            finalText = phaseText;
+        }
         lastPhase = phaseMeta;
 
         // Tag every assistant chat_messages row the agent persisted during
