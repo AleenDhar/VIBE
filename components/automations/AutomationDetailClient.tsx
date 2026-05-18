@@ -38,6 +38,17 @@ import {
     type ProjectAutomation,
 } from "@/lib/actions/automations";
 import type { ProjectPhase } from "@/lib/actions/phases";
+import { updatePhase } from "@/lib/actions/phases";
+import { getActiveModels, getUserAllowedModels, type AIModel } from "@/lib/actions/models";
+import { formatModelName } from "@/lib/usage-utils";
+import { createClient } from "@/lib/supabase/client";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
 import { extractPlaceholders } from "@/lib/automations/template";
 import { CsvUploadDialog } from "./CsvUploadDialog";
 import { formatDistanceToNow } from "date-fns";
@@ -59,6 +70,9 @@ const STATUS_STYLES: Record<AutomationTaskStatus, string> = {
 };
 
 export function AutomationDetailClient({ projectId, automation, initialTasks, initialPhases, canEdit }: Props) {
+    // Local copy of phases so column-header edits can update in place
+    // without a full page refresh. Initialized from server props.
+    const [phases, setPhases] = useState<ProjectPhase[]>(initialPhases);
     // Phases drive the per-phase columns. Sorted by position so columns line
     // up left-to-right with the pipeline execution order. Includes disabled
     // phases too — disabled phases don't run, so their cells will stay empty,
@@ -69,9 +83,84 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
     // combined with the effect calling setState — caused an infinite render
     // loop (Maximum update depth exceeded).
     const orderedPhases = useMemo(
-        () => [...initialPhases].sort((a, b) => a.position - b.position),
-        [initialPhases]
+        () => [...phases].sort((a, b) => a.position - b.position),
+        [phases]
     );
+
+    // Phase-editor modal state. Click on a column header opens this; user
+    // can rename the phase, change its model, and edit the system prompt
+    // without leaving the automations page.
+    const [editingPhase, setEditingPhase] = useState<ProjectPhase | null>(null);
+    const [phaseDraft, setPhaseDraft] = useState<{
+        name: string;
+        model_id: string | null;
+        system_prompt: string;
+    }>({ name: "", model_id: null, system_prompt: "" });
+    const [savingPhase, setSavingPhase] = useState(false);
+    const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+
+    // Load models the current user is allowed to use, same logic as PhasesCard.
+    useEffect(() => {
+        const supabase = createClient();
+        (async () => {
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) return;
+                const [models, allowed] = await Promise.all([
+                    getActiveModels(),
+                    getUserAllowedModels(user.id),
+                ]);
+                setAvailableModels(
+                    models.filter(m => m.is_available_to_all || allowed.includes(m.id))
+                );
+            } catch (e) {
+                console.error("AutomationDetailClient: failed to load models", e);
+            }
+        })();
+    }, []);
+
+    const modelNameFor = (id: string | null) =>
+        id ? (availableModels.find(m => m.id === id)?.name || id) : "No model";
+
+    const openPhaseEditor = (phase: ProjectPhase) => {
+        if (!canEdit) return;
+        setEditingPhase(phase);
+        setPhaseDraft({
+            name: phase.name || "",
+            model_id: phase.model_id,
+            system_prompt: phase.system_prompt || "",
+        });
+    };
+
+    const handleSavePhase = async () => {
+        if (!editingPhase) return;
+        setSavingPhase(true);
+        try {
+            const result = await updatePhase(editingPhase.id, {
+                name: phaseDraft.name.trim() || null,
+                model_id: phaseDraft.model_id,
+                system_prompt: phaseDraft.system_prompt,
+            });
+            if (!result.success) {
+                alert(`Failed: ${result.error}`);
+                return;
+            }
+            // Mirror to local state so the column updates immediately.
+            setPhases(prev => prev.map(p =>
+                p.id === editingPhase.id
+                    ? {
+                        ...p,
+                        name: phaseDraft.name.trim() || null,
+                        model_id: phaseDraft.model_id,
+                        system_prompt: phaseDraft.system_prompt,
+                    }
+                    : p
+            ));
+            setEditingPhase(null);
+        } finally {
+            setSavingPhase(false);
+        }
+    };
     const [tasks, setTasks] = useState<AutomationTask[]>(initialTasks);
     const [automationName, setAutomationName] = useState(automation.name || "");
     const [editingName, setEditingName] = useState(false);
@@ -96,7 +185,46 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
         phaseSubtitle: string | null;
         content: string;
     } | null>(null);
+    // chatId -> total cost in USD. The agent server only tracks cost per
+    // chat, not per phase or message, so we fetch the chat total and
+    // allocate proportionally across phases by output content length.
+    const [chatCosts, setChatCosts] = useState<Record<string, number>>({});
     const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Fetch chat cost for every task that has a chat_id. Refetches when
+    // tasks change (new chats appear / reruns happen). Batched to avoid
+    // hammering the agent server.
+    useEffect(() => {
+        const chatIds = Array.from(new Set(
+            tasks.filter(t => t.chat_id).map(t => t.chat_id as string)
+        ));
+        if (chatIds.length === 0) return;
+
+        let cancelled = false;
+        (async () => {
+            const results = await Promise.all(chatIds.map(async (id) => {
+                try {
+                    const res = await fetch(`/api/usage/${id}`);
+                    if (!res.ok) return [id, 0] as const;
+                    const body = await res.json();
+                    const cost = Number(body?.usage?.cost_usd) || 0;
+                    return [id, cost] as const;
+                } catch {
+                    return [id, 0] as const;
+                }
+            }));
+            if (cancelled) return;
+            setChatCosts(prev => {
+                const next = { ...prev };
+                for (const [id, cost] of results) next[id] = cost;
+                return next;
+            });
+        })();
+
+        return () => { cancelled = true; };
+        // Stringify chat_id + status so we refetch when a row completes /
+        // gets a fresh chat. (status changes when a phase finishes.)
+    }, [tasks.map(t => `${t.chat_id ?? ""}:${t.status}`).join("|")]);
 
     const templatePlaceholders = useMemo(
         () => extractPlaceholders(promptTemplate),
@@ -567,15 +695,22 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                 <th className="px-2 py-2 w-10 text-center">On</th>
                                 <th className="px-3 py-2 text-left w-64">Prompt</th>
                                 {orderedPhases.map(p => (
-                                    <th
-                                        key={p.id}
-                                        className="px-3 py-2 text-left w-72"
-                                        title={p.model_id || undefined}
-                                    >
-                                        {p.name || `Phase ${p.position}`}
-                                        {!p.enabled && (
-                                            <span className="ml-1 text-[9px] text-muted-foreground/50">(off)</span>
-                                        )}
+                                    <th key={p.id} className="px-3 py-2 text-left w-72">
+                                        <button
+                                            type="button"
+                                            onClick={() => openPhaseEditor(p)}
+                                            className="text-left hover:text-foreground transition-colors inline-flex items-center gap-1.5 cursor-pointer disabled:cursor-default"
+                                            disabled={!canEdit}
+                                            title={canEdit
+                                                ? `Click to edit ${p.name || `Phase ${p.position}`}`
+                                                : (p.model_id || undefined)}
+                                        >
+                                            {canEdit && <Pencil className="h-2.5 w-2.5 opacity-40" />}
+                                            <span>{p.name || `Phase ${p.position}`}</span>
+                                            {!p.enabled && (
+                                                <span className="ml-1 text-[9px] text-muted-foreground/50">(off)</span>
+                                            )}
+                                        </button>
                                     </th>
                                 ))}
                                 <th className="px-3 py-2 text-left w-28">Status</th>
@@ -631,6 +766,11 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                 </button>
                                             )}
                                         </td>
+                                        {/* Total content length across the task's phase_outputs.
+                                            Used to allocate the chat's total cost across phases
+                                            proportionally (best estimate we can do without per-
+                                            phase token billing from the agent server). */}
+                                        {(() => null)()}
                                         {orderedPhases.map(phase => {
                                             const output = task.phase_outputs?.find(
                                                 o => o.phase_position === phase.position
@@ -643,6 +783,15 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                             // full pipeline has run at least once). Without a chat
                                             // there's nothing to rerun against.
                                             const canRerun = canEdit && !isRunning && !!task.chat_id;
+                                            // Per-phase cost estimate: total chat cost split
+                                            // across phases by output length. Approximate — agent
+                                            // server only tracks cost at the chat level.
+                                            const chatTotalCost = task.chat_id ? (chatCosts[task.chat_id] ?? null) : null;
+                                            const totalOutputLen = (task.phase_outputs || [])
+                                                .reduce((sum, o) => sum + (o.content?.length || 0), 0);
+                                            const phaseCostEstimate = (output && chatTotalCost !== null && totalOutputLen > 0)
+                                                ? chatTotalCost * ((output.content?.length || 0) / totalOutputLen)
+                                                : null;
 
                                             return (
                                                 <td
@@ -670,9 +819,35 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                                     ) : (
                                                                         <div className="text-xs text-muted-foreground/50 italic">(empty response)</div>
                                                                     )}
-                                                                    <div className="text-[10px] text-primary/70 inline-flex items-center gap-0.5 mt-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                                                                        <Maximize2 className="h-2.5 w-2.5" />
-                                                                        more
+                                                                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                                        <div className="text-[10px] text-primary/70 inline-flex items-center gap-0.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                                                                            <Maximize2 className="h-2.5 w-2.5" />
+                                                                            more
+                                                                        </div>
+                                                                        {output.phase_model_id && (
+                                                                            <span
+                                                                                className={`text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap ${
+                                                                                    output.phase_model_id === phase.model_id
+                                                                                        ? "text-muted-foreground/70 bg-muted/50"
+                                                                                        : "text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30"
+                                                                                }`}
+                                                                                title={
+                                                                                    output.phase_model_id === phase.model_id
+                                                                                        ? `Ran with ${output.phase_model_id}`
+                                                                                        : `Ran with ${output.phase_model_id} (phase is now configured for ${phase.model_id || "no model"}). Re-run to use the current model.`
+                                                                                }
+                                                                            >
+                                                                                {formatModelName(output.phase_model_id)}
+                                                                            </span>
+                                                                        )}
+                                                                        {phaseCostEstimate !== null && (
+                                                                            <span
+                                                                                className="text-[10px] text-emerald-700 dark:text-emerald-400 font-mono"
+                                                                                title={`~ estimated share of chat cost ($${chatTotalCost?.toFixed(4)} total) by output length`}
+                                                                            >
+                                                                                ~ ${phaseCostEstimate.toFixed(4)}
+                                                                            </span>
+                                                                        )}
                                                                     </div>
                                                                 </button>
                                                             ) : isActivePhase ? (
@@ -782,6 +957,95 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
             {/* Full-output dialog — renders a single phase's output through
                 the chat's markdown parser so tables/headers/lists look
                 identical to how they appear inside the chat itself. */}
+            {/* Phase editor dialog — edits the project_phases row, so changes
+                affect every chat that uses this project's pipeline. */}
+            <Dialog open={!!editingPhase} onOpenChange={(open) => !open && setEditingPhase(null)}>
+                <DialogContent className="!max-w-4xl w-[90vw] max-h-[90vh] overflow-hidden flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Pencil className="h-4 w-4 text-muted-foreground" />
+                            Edit {editingPhase ? `Phase ${editingPhase.position}` : "phase"}
+                        </DialogTitle>
+                    </DialogHeader>
+                    {editingPhase && (
+                        <div className="flex-1 overflow-y-auto space-y-4 px-1">
+                            <div>
+                                <label className="text-[10px] uppercase tracking-wide text-muted-foreground/60 block mb-1">
+                                    Name
+                                </label>
+                                <input
+                                    type="text"
+                                    value={phaseDraft.name}
+                                    onChange={(e) => setPhaseDraft(d => ({ ...d, name: e.target.value }))}
+                                    placeholder={`Phase ${editingPhase.position}`}
+                                    className="w-full bg-muted/40 border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="text-[10px] uppercase tracking-wide text-muted-foreground/60 block mb-1">
+                                    Model
+                                </label>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button
+                                            variant="ghost"
+                                            className="h-9 w-full justify-between text-sm border border-border bg-muted/40 font-normal"
+                                        >
+                                            <span className="truncate">{modelNameFor(phaseDraft.model_id)}</span>
+                                            <ChevronDown className="h-3.5 w-3.5 shrink-0 ml-1" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto w-[var(--radix-dropdown-menu-trigger-width)]">
+                                        {availableModels.length === 0 ? (
+                                            <DropdownMenuItem disabled>No models available</DropdownMenuItem>
+                                        ) : (
+                                            availableModels.map(m => (
+                                                <DropdownMenuItem
+                                                    key={m.id}
+                                                    onClick={() => setPhaseDraft(d => ({ ...d, model_id: m.id }))}
+                                                >
+                                                    {m.name}
+                                                    <span className="ml-auto text-[10px] text-muted-foreground/60 font-mono">{m.id}</span>
+                                                </DropdownMenuItem>
+                                            ))
+                                        )}
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </div>
+
+                            <div>
+                                <label className="text-[10px] uppercase tracking-wide text-muted-foreground/60 block mb-1">
+                                    System prompt
+                                </label>
+                                <textarea
+                                    value={phaseDraft.system_prompt}
+                                    onChange={(e) => setPhaseDraft(d => ({ ...d, system_prompt: e.target.value }))}
+                                    placeholder="Enter system instructions for this phase…"
+                                    className="w-full min-h-[60vh] max-h-[75vh] bg-muted/40 border border-border rounded-md p-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y leading-relaxed"
+                                />
+                                <p className="text-[10px] text-muted-foreground/60 mt-1">
+                                    Edits apply at the project level — every chat that runs this pipeline will use the updated prompt.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    <div className="flex gap-2 justify-end pt-2 border-t border-border/40">
+                        <Button
+                            variant="ghost"
+                            onClick={() => setEditingPhase(null)}
+                            disabled={savingPhase}
+                        >
+                            Cancel
+                        </Button>
+                        <Button onClick={handleSavePhase} disabled={savingPhase} className="gap-1.5">
+                            {savingPhase ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                            Save
+                        </Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
+
             <Dialog open={!!openOutput} onOpenChange={(open) => !open && setOpenOutput(null)}>
                 <DialogContent className="!max-w-[90vw] w-[90vw] max-h-[90vh] overflow-hidden flex flex-col">
                     <DialogHeader>
