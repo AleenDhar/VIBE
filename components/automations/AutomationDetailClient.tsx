@@ -14,6 +14,7 @@ import {
     Save,
     X,
     MessageSquare,
+    FileSpreadsheet,
 } from "lucide-react";
 import {
     createTask,
@@ -21,6 +22,7 @@ import {
     getChatPhaseProgress,
     listTasks,
     renameAutomation,
+    updateAutomation,
     updateTask,
     type AutomationTask,
     type AutomationTaskStatus,
@@ -28,6 +30,8 @@ import {
     type ProjectAutomation,
 } from "@/lib/actions/automations";
 import type { ProjectPhase } from "@/lib/actions/phases";
+import { extractPlaceholders } from "@/lib/automations/template";
+import { CsvUploadDialog } from "./CsvUploadDialog";
 import { formatDistanceToNow } from "date-fns";
 
 interface Props {
@@ -61,8 +65,14 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
         [initialPhases]
     );
     const [tasks, setTasks] = useState<AutomationTask[]>(initialTasks);
+    const [automationName, setAutomationName] = useState(automation.name || "");
     const [editingName, setEditingName] = useState(false);
     const [nameDraft, setNameDraft] = useState(automation.name || "");
+    const [promptTemplate, setPromptTemplate] = useState(automation.prompt_template || "");
+    const [editingTemplate, setEditingTemplate] = useState(false);
+    const [templateDraft, setTemplateDraft] = useState(automation.prompt_template || "");
+    const [savingTemplate, setSavingTemplate] = useState(false);
+    const [csvOpen, setCsvOpen] = useState(false);
     const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
     const [promptDraft, setPromptDraft] = useState("");
     const [busyId, setBusyId] = useState<string | null>(null);
@@ -71,6 +81,11 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
     // Live progress for the active phase of each running task, keyed by task.id.
     const [liveProgress, setLiveProgress] = useState<Record<string, LivePhaseRow[]>>({});
     const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    const templatePlaceholders = useMemo(
+        () => extractPlaceholders(promptTemplate),
+        [promptTemplate]
+    );
 
     const anyRunning = tasks.some(t => t.status === "running");
 
@@ -132,8 +147,38 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
         if (!result.success) {
             alert(`Failed: ${result.error}`);
         } else {
+            setAutomationName(nameDraft.trim() || "Untitled automation");
             setEditingName(false);
         }
+    };
+
+    // ── Prompt template ──────────────────────────────────────────────────
+    const handleSaveTemplate = async () => {
+        setSavingTemplate(true);
+        try {
+            const result = await updateAutomation(automation.id, {
+                prompt_template: templateDraft,
+            });
+            if (!result.success) {
+                alert(`Failed: ${result.error}`);
+            } else {
+                setPromptTemplate(templateDraft.trim());
+                setEditingTemplate(false);
+            }
+        } finally {
+            setSavingTemplate(false);
+        }
+    };
+
+    const handleCsvUploaded = async ({ inserted, skipped }: { inserted: number; skipped: number }) => {
+        await refresh();
+        const msg =
+            skipped > 0
+                ? `Added ${inserted} rows (${skipped} skipped — missing placeholder values).`
+                : `Added ${inserted} rows.`;
+        // Lightweight non-blocking feedback. alert() is what the rest of this
+        // component uses for status, so stay consistent.
+        alert(msg);
     };
 
     // ── Row CRUD ──────────────────────────────────────────────────────────
@@ -296,7 +341,7 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                     ) : (
                         <div className="flex items-center gap-2">
                             <h1 className="text-2xl md:text-3xl font-serif font-medium tracking-tight text-foreground truncate">
-                                {automation.name || "Untitled automation"}
+                                {automationName || "Untitled automation"}
                             </h1>
                             {canEdit && (
                                 <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground" onClick={() => setEditingName(true)}>
@@ -309,6 +354,94 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                         <p className="text-sm text-muted-foreground mt-1">{automation.description}</p>
                     )}
                 </div>
+            </div>
+
+            {/* Prompt template editor */}
+            <div className="border border-border rounded-lg p-3 bg-muted/10">
+                <div className="flex items-center justify-between gap-3 mb-2">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        Prompt template
+                    </div>
+                    {canEdit && !editingTemplate && (
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs gap-1"
+                            onClick={() => {
+                                setTemplateDraft(promptTemplate);
+                                setEditingTemplate(true);
+                            }}
+                        >
+                            <Pencil className="h-3 w-3" />
+                            {promptTemplate ? "Edit" : "Add"}
+                        </Button>
+                    )}
+                </div>
+                {editingTemplate ? (
+                    <div className="space-y-2">
+                        <textarea
+                            value={templateDraft}
+                            onChange={(e) => setTemplateDraft(e.target.value)}
+                            placeholder={"e.g. Diagnose account {{account_id}} for campaign {{campaign_id}}, owned by BDR {{bdr_id}}."}
+                            className="w-full min-h-[80px] bg-background border border-border rounded px-2 py-1.5 text-sm resize-y focus:outline-none focus:ring-1 focus:ring-primary"
+                            autoFocus
+                        />
+                        <div className="flex items-center justify-between gap-2">
+                            <div className="text-[11px] text-muted-foreground">
+                                Use{" "}
+                                <code className="px-1 py-0.5 rounded bg-muted text-foreground/80">{"{{name}}"}</code>{" "}
+                                for slots filled by CSV columns.
+                            </div>
+                            <div className="flex gap-1">
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-7 px-2 text-xs"
+                                    onClick={() => {
+                                        setEditingTemplate(false);
+                                        setTemplateDraft(promptTemplate);
+                                    }}
+                                    disabled={savingTemplate}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    className="h-7 px-2 text-xs gap-1"
+                                    onClick={handleSaveTemplate}
+                                    disabled={savingTemplate}
+                                >
+                                    {savingTemplate ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                    Save
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                ) : promptTemplate ? (
+                    <div className="space-y-2">
+                        <div className="text-sm whitespace-pre-wrap text-foreground/90">{promptTemplate}</div>
+                        {templatePlaceholders.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                                {templatePlaceholders.map((p) => (
+                                    <code
+                                        key={p}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20"
+                                    >
+                                        {`{{${p}}}`}
+                                    </code>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="text-sm text-muted-foreground italic">
+                        No template set. Add one like{" "}
+                        <code className="px-1 py-0.5 rounded bg-muted not-italic text-foreground/70">
+                            Diagnose {"{{account_id}}"} for {"{{campaign_id}}"}
+                        </code>{" "}
+                        to enable CSV upload.
+                    </div>
+                )}
             </div>
 
             {/* Top controls */}
@@ -325,6 +458,21 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                     <Button onClick={handleAddRow} variant="outline" className="gap-2">
                         <Plus className="h-4 w-4" />
                         Add row
+                    </Button>
+                )}
+                {canEdit && (
+                    <Button
+                        onClick={() => setCsvOpen(true)}
+                        variant="outline"
+                        className="gap-2"
+                        title={
+                            templatePlaceholders.length === 0
+                                ? "Set a prompt template first"
+                                : "Upload a CSV to add rows"
+                        }
+                    >
+                        <FileSpreadsheet className="h-4 w-4" />
+                        Upload CSV
                     </Button>
                 )}
                 <div className="flex items-center gap-2 ml-auto">
@@ -522,6 +670,14 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                     </table>
                 </div>
             )}
+
+            <CsvUploadDialog
+                open={csvOpen}
+                onOpenChange={setCsvOpen}
+                automationId={automation.id}
+                promptTemplate={promptTemplate || null}
+                onUploaded={handleCsvUploaded}
+            />
         </div>
     );
 }
