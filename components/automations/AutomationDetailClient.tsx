@@ -15,7 +15,15 @@ import {
     X,
     MessageSquare,
     FileSpreadsheet,
+    Maximize2,
 } from "lucide-react";
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import {
     createTask,
     deleteTask,
@@ -80,6 +88,14 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
     const [excludeAlreadyRan, setExcludeAlreadyRan] = useState(false);
     // Live progress for the active phase of each running task, keyed by task.id.
     const [liveProgress, setLiveProgress] = useState<Record<string, LivePhaseRow[]>>({});
+    // When set, opens a modal showing the full phase output rendered through
+    // the same markdown parser the chat uses (tables, headers, lists, etc.).
+    const [openOutput, setOpenOutput] = useState<{
+        taskPrompt: string;
+        phaseTitle: string;
+        phaseSubtitle: string | null;
+        content: string;
+    } | null>(null);
     const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const templatePlaceholders = useMemo(
@@ -236,8 +252,23 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
 
     // ── Run / Stop ────────────────────────────────────────────────────────
     const runOne = async (taskId: string) => {
-        await fetch(`/api/automations/tasks/${taskId}/run`, { method: "POST" });
-        await refresh();
+        // The route polls the task row until chat_id appears, so the response
+        // body's chatId lands within a few hundred ms of the click. Patch it
+        // straight into local state so the Chat column's Open link shows up
+        // immediately — don't wait for the next 2s poll tick.
+        try {
+            const res = await fetch(`/api/automations/tasks/${taskId}/run`, { method: "POST" });
+            if (res.ok) {
+                const body = await res.json();
+                if (body?.chatId) {
+                    setTasks(prev => prev.map(t =>
+                        t.id === taskId ? { ...t, chat_id: body.chatId } : t
+                    ));
+                }
+            }
+        } finally {
+            await refresh();
+        }
     };
 
     const stopOne = async (taskId: string) => {
@@ -271,6 +302,39 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
             await stopOne(task.id);
         } finally {
             setBusyId(null);
+        }
+    };
+
+    // Per-cell rerun. Reruns the target phase AND every phase after it,
+    // reusing the task's existing chat. Outputs for phases < target stay;
+    // outputs for phases >= target are wiped and regenerated. Optimistic
+    // local update mirrors that — the column for the target and any later
+    // phases reverts to running/empty until the rerun fills them in.
+    const handleRerunPhase = async (task: AutomationTask, phasePosition: number) => {
+        if (!task.chat_id) {
+            alert("No chat associated with this row — run the full pipeline first.");
+            return;
+        }
+        setTasks(prev => prev.map(t => {
+            if (t.id !== task.id) return t;
+            return {
+                ...t,
+                status: "running",
+                last_phase_index: phasePosition,
+                last_phase_name: null,
+                error: null,
+                phase_outputs: (t.phase_outputs || []).filter(
+                    o => o.phase_position < phasePosition
+                ),
+            };
+        }));
+        try {
+            await fetch(
+                `/api/automations/tasks/${task.id}/phases/${phasePosition}/run`,
+                { method: "POST" }
+            );
+        } finally {
+            await refresh();
         }
     };
 
@@ -574,25 +638,61 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                             const isActivePhase =
                                                 isRunning && task.last_phase_index === phase.position;
                                             const live = isActivePhase ? (liveProgress[task.id] || []) : [];
+                                            // Per-cell rerun is allowed only when the row isn't
+                                            // currently running AND the task has a chat (i.e., the
+                                            // full pipeline has run at least once). Without a chat
+                                            // there's nothing to rerun against.
+                                            const canRerun = canEdit && !isRunning && !!task.chat_id;
 
                                             return (
-                                                <td key={phase.id} className="px-3 py-2 align-top">
-                                                    {output ? (
-                                                        <details className="group max-w-[280px]">
-                                                            <summary className="cursor-pointer text-xs text-foreground/90 leading-snug list-none">
-                                                                <span className="line-clamp-3 group-open:line-clamp-none whitespace-pre-wrap">
-                                                                    {output.content || <span className="text-muted-foreground/50 italic">(empty response)</span>}
-                                                                </span>
-                                                                {output.content && output.content.length > 140 && (
-                                                                    <span className="text-[10px] text-primary/70 group-open:hidden ml-1">…more</span>
-                                                                )}
-                                                            </summary>
-                                                        </details>
-                                                    ) : isActivePhase ? (
-                                                        <LivePhaseCell rows={live} />
-                                                    ) : (
-                                                        <span className="text-xs text-muted-foreground/40">—</span>
-                                                    )}
+                                                <td
+                                                    key={phase.id}
+                                                    className="px-3 py-2 align-top max-w-[280px] w-[280px] overflow-hidden"
+                                                >
+                                                    <div className="flex items-start gap-1.5">
+                                                        <div className="flex-1 min-w-0">
+                                                            {output ? (
+                                                                <button
+                                                                    type="button"
+                                                                    className="text-left w-full group hover:bg-muted/30 rounded -mx-1 px-1 py-0.5 block"
+                                                                    onClick={() => setOpenOutput({
+                                                                        taskPrompt: task.prompt,
+                                                                        phaseTitle: `Phase ${phase.position}${phase.name ? ` — ${phase.name}` : ""}`,
+                                                                        phaseSubtitle: phase.model_id || null,
+                                                                        content: output.content,
+                                                                    })}
+                                                                    title="Click to open full output"
+                                                                >
+                                                                    {output.content ? (
+                                                                        <div className="text-xs text-foreground/90 leading-snug line-clamp-5 whitespace-pre-wrap break-words">
+                                                                            {output.content}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="text-xs text-muted-foreground/50 italic">(empty response)</div>
+                                                                    )}
+                                                                    <div className="text-[10px] text-primary/70 inline-flex items-center gap-0.5 mt-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                                                                        <Maximize2 className="h-2.5 w-2.5" />
+                                                                        more
+                                                                    </div>
+                                                                </button>
+                                                            ) : isActivePhase ? (
+                                                                <LivePhaseCell rows={live} />
+                                                            ) : (
+                                                                <span className="text-xs text-muted-foreground/40">—</span>
+                                                            )}
+                                                        </div>
+                                                        {canRerun && (
+                                                            <Button
+                                                                size="icon"
+                                                                variant="ghost"
+                                                                className="h-6 w-6 shrink-0 text-emerald-600 hover:text-emerald-700"
+                                                                onClick={() => handleRerunPhase(task, phase.position)}
+                                                                title={`Re-run ${phase.name || `Phase ${phase.position}`}`}
+                                                            >
+                                                                <Play className="h-3 w-3" />
+                                                            </Button>
+                                                        )}
+                                                    </div>
                                                 </td>
                                             );
                                         })}
@@ -655,7 +755,7 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                                                         variant="ghost"
                                                         className="h-7 w-7 text-muted-foreground hover:text-destructive"
                                                         onClick={() => handleDeleteRow(task)}
-                                                        disabled={isBusy || isRunning}
+                                                        disabled={isBusy}
                                                         title="Delete row"
                                                     >
                                                         <Trash2 className="h-3.5 w-3.5" />
@@ -678,6 +778,32 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                 promptTemplate={promptTemplate || null}
                 onUploaded={handleCsvUploaded}
             />
+
+            {/* Full-output dialog — renders a single phase's output through
+                the chat's markdown parser so tables/headers/lists look
+                identical to how they appear inside the chat itself. */}
+            <Dialog open={!!openOutput} onOpenChange={(open) => !open && setOpenOutput(null)}>
+                <DialogContent className="!max-w-[90vw] w-[90vw] max-h-[90vh] overflow-hidden flex flex-col">
+                    <DialogHeader>
+                        <DialogTitle className="flex flex-col gap-1">
+                            <span>{openOutput?.phaseTitle}</span>
+                            {openOutput?.phaseSubtitle && (
+                                <span className="text-[11px] font-mono font-normal text-muted-foreground/70">
+                                    {openOutput.phaseSubtitle}
+                                </span>
+                            )}
+                        </DialogTitle>
+                        {openOutput?.taskPrompt && (
+                            <div className="text-xs text-muted-foreground line-clamp-2 mt-1">
+                                Row prompt: {openOutput.taskPrompt}
+                            </div>
+                        )}
+                    </DialogHeader>
+                    <div className="overflow-y-auto flex-1 px-1 prose-sm">
+                        {openOutput && <MarkdownContent content={openOutput.content} />}
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

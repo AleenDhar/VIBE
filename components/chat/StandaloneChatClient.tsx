@@ -7,9 +7,10 @@ interface StandaloneChatClientProps {
     projectId: string | null;
     chatId: string;
     initialMessages: any[];
+    automationTaskId?: string | null;
 }
 
-export function StandaloneChatClient({ projectId, chatId, initialMessages }: StandaloneChatClientProps) {
+export function StandaloneChatClient({ projectId, chatId, initialMessages, automationTaskId }: StandaloneChatClientProps) {
     const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
     const [initialModel, setInitialModel] = useState<string | undefined>(undefined);
     const [initialImages, setInitialImages] = useState<string[] | undefined>(undefined);
@@ -53,6 +54,7 @@ export function StandaloneChatClient({ projectId, chatId, initialMessages }: Sta
             initialInput={initialInput}
             initialModel={initialModel}
             initialImages={initialImages}
+            automationTaskId={automationTaskId}
         />
     );
 }

@@ -333,6 +333,31 @@ Please use this context to personalize your responses.`;
 
         const stream = new ReadableStream({
             async start(controller) {
+                // Track whether the client is still connected. Once the
+                // browser disconnects (closed tab, hot-reload, idle timeout),
+                // every controller.enqueue call throws. Previously that
+                // exception bubbled up through runPhasePipeline's read loop,
+                // crashed the pipeline mid-phase, skipped tagging for the
+                // current phase, and skipped any remaining phases entirely —
+                // even though the agent server's stream was still firing
+                // chat_messages rows server-side. The user would reload the
+                // page and see a chat that "stopped after phase N" with
+                // dozens of untagged orphan rows.
+                //
+                // Wrap each enqueue in try/catch and flip a `clientGone`
+                // flag on first failure. After that, callbacks become
+                // no-ops so the pipeline keeps running to completion on the
+                // server — agent finishes, every phase runs, every row gets
+                // tagged. The user reloads and sees everything.
+                let clientGone = false;
+                const safeEnqueue = (chunk: Uint8Array) => {
+                    if (clientGone) return;
+                    try {
+                        controller.enqueue(chunk);
+                    } catch {
+                        clientGone = true;
+                    }
+                };
                 try {
                     const result = await runPhasePipeline(
                         {
@@ -347,36 +372,35 @@ Please use this context to personalize your responses.`;
                         },
                         {
                             onPhaseStart: (phase) => {
-                                controller.enqueue(sseEvent({ type: "phase_start", phase }));
+                                safeEnqueue(sseEvent({ type: "phase_start", phase }));
                             },
                             onPhaseChunk: (bytes) => {
-                                controller.enqueue(bytes);
+                                safeEnqueue(bytes);
                             },
                             onPhaseEnd: (phase) => {
-                                controller.enqueue(sseEvent({ type: "phase_end", phase }));
+                                safeEnqueue(sseEvent({ type: "phase_end", phase }));
                             },
                             onError: (message) => {
-                                controller.enqueue(sseEvent({ type: "error", content: message }));
+                                safeEnqueue(sseEvent({ type: "error", content: message }));
                             },
                         }
                     );
                     if (result.failed && result.error) {
                         // onError already enqueued — nothing extra to do.
                     }
-                    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-                    controller.close();
+                    safeEnqueue(encoder.encode("data: [DONE]\n\n"));
+                    try { controller.close(); } catch {}
                 } catch (err: any) {
                     console.error("[API] Phase pipeline error:", err);
-                    try {
-                        controller.enqueue(sseEvent({ type: "error", content: err?.message || "Pipeline error" }));
-                    } catch {}
-                    controller.close();
+                    safeEnqueue(sseEvent({ type: "error", content: err?.message || "Pipeline error" }));
+                    try { controller.close(); } catch {}
                 }
             },
             cancel() {
-                // Client disconnected — pipeline can't be cancelled mid-phase
-                // from here; it'll finish the in-flight phase and exit on the
-                // next loop iteration's broken enqueue.
+                // Client disconnected. The pipeline keeps running on the
+                // server (safeEnqueue swallows the resulting errors) so the
+                // agent's work finishes and every phase gets tagged. User
+                // can reload to see the full chat.
             },
         });
 
