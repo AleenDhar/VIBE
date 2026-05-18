@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { ArrowLeft, MoreHorizontal, Star, Plus, ArrowUp, ArrowDown, MessageSquare, ChevronDown, Paperclip, Image as ImageIcon, X, FileText as FileIcon, Loader2, Copy, Pencil, Search } from "lucide-react";
@@ -146,6 +146,29 @@ export function ProjectPageClient({
     const [cloning, setCloning] = useState(false);
     const [projectName, setProjectName] = useState(project.name);
     const [runsFilter, setRunsFilter] = useState("");
+
+    // When the project has at least one enabled phase, the chat runs through
+    // the phase pipeline — every phase carries its own model_id, so the
+    // user-selected model on the composer would be ignored at request time
+    // (see app/api/chat/route.ts: "phases exist → projects use the pipeline").
+    // Hiding the selector here removes a dead control and shows the user the
+    // models that will actually run, in order.
+    const enabledPhases = useMemo(
+        () => initialPhases
+            .filter(p => p.enabled)
+            .slice()
+            .sort((a, b) => a.position - b.position),
+        [initialPhases]
+    );
+    const hasEnabledPhases = enabledPhases.length > 0;
+    // Tooltip for the phase-pipeline label, listing each phase's model so the
+    // user can see what's actually going to run without leaving the page.
+    const phaseModelsTooltip = useMemo(() => {
+        if (!hasEnabledPhases) return undefined;
+        return enabledPhases
+            .map(p => `${p.position}. ${p.name || "Phase " + p.position}: ${p.model_id || "default"}`)
+            .join(" · ");
+    }, [enabledPhases, hasEnabledPhases]);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -545,32 +568,46 @@ export function ProjectPageClient({
                                             </Button>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="sm"
-                                                        type="button"
-                                                        className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 rounded-lg"
-                                                    >
-                                                        {selectedModel ? selectedModel.name : "Loading Models..."}
-                                                        <ChevronDown className="h-3 w-3 opacity-50" />
-                                                    </Button>
-                                                </DropdownMenuTrigger>
-                                                {availableModels.length > 0 && (
-                                                    <DropdownMenuContent align="end" className="min-w-[160px]">
-                                                        {availableModels.map((m) => (
-                                                            <DropdownMenuItem
-                                                                key={m.id}
-                                                                onClick={() => setSelectedModel(m)}
-                                                                className={selectedModel?.id === m.id ? "bg-accent" : ""}
-                                                            >
-                                                                {m.name}
-                                                            </DropdownMenuItem>
-                                                        ))}
-                                                    </DropdownMenuContent>
-                                                )}
-                                            </DropdownMenu>
+                                            {hasEnabledPhases ? (
+                                                // Phase-pipeline project: model is fixed by the
+                                                // pipeline definition. Show a static label that
+                                                // tells the user that's the case (and on hover,
+                                                // which models will run, in order).
+                                                <div
+                                                    className="h-8 inline-flex items-center gap-1.5 text-xs text-muted-foreground px-2.5 rounded-lg cursor-default select-none"
+                                                    title={phaseModelsTooltip}
+                                                >
+                                                    Phase pipeline · {enabledPhases.length}{" "}
+                                                    {enabledPhases.length === 1 ? "phase" : "phases"}
+                                                </div>
+                                            ) : (
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            type="button"
+                                                            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 rounded-lg"
+                                                        >
+                                                            {selectedModel ? selectedModel.name : "Loading Models..."}
+                                                            <ChevronDown className="h-3 w-3 opacity-50" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    {availableModels.length > 0 && (
+                                                        <DropdownMenuContent align="end" className="min-w-[160px]">
+                                                            {availableModels.map((m) => (
+                                                                <DropdownMenuItem
+                                                                    key={m.id}
+                                                                    onClick={() => setSelectedModel(m)}
+                                                                    className={selectedModel?.id === m.id ? "bg-accent" : ""}
+                                                                >
+                                                                    {m.name}
+                                                                </DropdownMenuItem>
+                                                            ))}
+                                                        </DropdownMenuContent>
+                                                    )}
+                                                </DropdownMenu>
+                                            )}
                                             <Button
                                                 type="submit"
                                                 size="icon"
