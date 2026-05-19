@@ -36,13 +36,25 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
 
     if (!chat) notFound();
 
-    // Fetch messages — order by sequence (server contract); created_at as tiebreaker.
+    // Fetch messages — order by wall-clock time first.
+    //
+    // The earlier "ORDER BY sequence, created_at" was wrong in practice: the
+    // agent backend resets `sequence` to 0 on every user turn, AND every
+    // user-role row is also persisted with sequence=0. With sequence as the
+    // primary key, a multi-turn chat clustered every sequence=0 row at the
+    // very top of the render (all user messages, then assistant sequence=0
+    // from each turn) before any sequence=1 rows appeared — so the user saw
+    // their own messages stacked at the top and the assistant replies pushed
+    // below in a giant block. created_at is monotonic across turns, so it's
+    // the correct primary sort. sequence stays as a tiebreaker for the
+    // (common) case where multiple rows arrive in the same millisecond
+    // during a streaming burst.
     const { data: messages } = await supabase
         .from("chat_messages")
         .select("*")
         .eq("chat_id", chatId)
-        .order("sequence", { ascending: true })
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .order("sequence", { ascending: true });
 
     // If this chat was created by an automation task, the per-phase Rerun
     // button needs the taskId. We also fetch phase_outputs + the project's
