@@ -1074,7 +1074,32 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
             </Dialog>
 
             <Dialog open={!!openOutput} onOpenChange={(open) => !open && setOpenOutput(null)}>
-                <DialogContent className="!max-w-[90vw] w-[90vw] max-h-[90vh] overflow-hidden flex flex-col">
+                {/*
+                  Width via inline style instead of `w-[90vw] !max-w-[90vw]`
+                  Tailwind utilities. Two reasons:
+                    1. The base radix Dialog ships with `sm:max-w-lg` (32rem)
+                       baked into its className. With Tailwind v4 + tailwind-merge
+                       the `!max-w-[90vw]` override has a habit of getting locked
+                       at the value computed when the dialog first mounted —
+                       reproducible by mounting the modal at one viewport and
+                       resizing, the modal stays at the old width.
+                    2. Inline style is the highest-specificity escape hatch
+                       short of !important — and it re-applies on every render,
+                       so any future style war can be won here without touching
+                       the radix primitive.
+
+                  90vw with a 1600px ceiling keeps the modal comfortable on
+                  ultrawides without leaving the content bare against the
+                  viewport edge.
+                */}
+                <DialogContent
+                    className="overflow-hidden flex flex-col"
+                    style={{
+                        width: "min(90vw, 1600px)",
+                        maxWidth: "min(90vw, 1600px)",
+                        maxHeight: "90vh",
+                    }}
+                >
                     <DialogHeader>
                         <DialogTitle className="flex flex-col gap-1">
                             <span>{openOutput?.phaseTitle}</span>
@@ -1090,7 +1115,17 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                             </div>
                         )}
                     </DialogHeader>
-                    <div className="overflow-y-auto flex-1 px-1 prose-sm">
+                    {/*
+                      min-h-0 / min-w-0: by default a flex item's min-{height,
+                      width} is `auto`, which resolves to its content's min-
+                      content size — that lets wide markdown tables push this
+                      scroller (and the dialog) wider than max-width, bypassing
+                      our cap. Setting both to 0 lets the scroller actually
+                      shrink to the parent's available space; overflow-{x,y}-
+                      auto then takes over and adds scrollbars only where
+                      content overflows.
+                    */}
+                    <div className="overflow-y-auto overflow-x-auto flex-1 min-h-0 min-w-0 px-1 prose-sm">
                         {openOutput && <MarkdownContent content={openOutput.content} />}
                     </div>
                 </DialogContent>

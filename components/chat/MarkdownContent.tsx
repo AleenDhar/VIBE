@@ -63,14 +63,23 @@ export function MarkdownContent({ content, compact = false }: { content: string;
                 tr: ({ node, ...props }: any) => (
                     <tr className="bg-card/50 hover:bg-muted/50 transition-colors" {...props} />
                 ),
+                // Drop `whitespace-nowrap` from th/td. Phase-output tables
+                // commonly contain long values (titles like "Head of AI &
+                // Analytics", URLs, IDs) — forcing them onto a single line
+                // blew the table wider than the modal, requiring a buried
+                // horizontal scroll that users wouldn't think to look for.
+                // `break-words` lets long unbroken tokens wrap mid-string
+                // (long URLs, opportunity IDs) so the table fits the modal.
+                // `align-top` keeps multi-line cells readable when row heights
+                // grow unevenly.
                 th: ({ node, ...props }: any) => (
-                    <th className="px-4 py-3 font-medium whitespace-nowrap" {...props} />
+                    <th className="px-4 py-3 font-medium align-top break-words" {...props} />
                 ),
                 hr: ({ node, ...props }: any) => (
                     <hr className="my-6 border-border/50" {...props} />
                 ),
                 td: ({ node, ...props }: any) => (
-                    <td className="px-4 py-3 whitespace-nowrap md:whitespace-normal" {...props} />
+                    <td className="px-4 py-3 align-top break-words" {...props} />
                 ),
                 h1: ({ node, ...props }: any) => (
                     <h1 className="text-xl font-bold mt-5 mb-3 text-foreground" {...props} />
