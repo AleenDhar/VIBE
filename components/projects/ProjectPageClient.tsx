@@ -147,12 +147,22 @@ export function ProjectPageClient({
     const [projectName, setProjectName] = useState(project.name);
     const [runsFilter, setRunsFilter] = useState("");
 
-    // When the project has at least one enabled phase, the chat runs through
-    // the phase pipeline — every phase carries its own model_id, so the
-    // user-selected model on the composer would be ignored at request time
-    // (see app/api/chat/route.ts: "phases exist → projects use the pipeline").
-    // Hiding the selector here removes a dead control and shows the user the
-    // models that will actually run, in order.
+    // When the project has multiple enabled phases, the chat runs as a
+    // sequential pipeline where every phase carries its own model_id, and
+    // the composer's model dropdown is replaced with a non-interactive chip
+    // summarizing what will run (a true selector would be misleading — the
+    // backend ignores it on the pipeline path, see app/api/chat/route.ts:
+    // "phases exist → projects use the pipeline").
+    //
+    // For SINGLE-phase projects we deliberately keep the dropdown visible —
+    // a one-phase project feels like a regular chat to the user, and the
+    // selector is a familiar control. The backend still gives priority to
+    // the phase's model_id over the user's selection (the user's selection
+    // only takes effect if the phase has no model assigned, since the
+    // pipeline path doesn't read the user's `model` payload).
+    //
+    // Zero enabled phases falls through to the dropdown as before — chat
+    // runs as a single call and the user-selected model is honored.
     const enabledPhases = useMemo(
         () => initialPhases
             .filter(p => p.enabled)
@@ -160,15 +170,15 @@ export function ProjectPageClient({
             .sort((a, b) => a.position - b.position),
         [initialPhases]
     );
-    const hasEnabledPhases = enabledPhases.length > 0;
-    // Tooltip for the phase-pipeline label, listing each phase's model so the
+    const hasMultipleEnabledPhases = enabledPhases.length > 1;
+    // Tooltip for the phase-pipeline chip, listing each phase's model so the
     // user can see what's actually going to run without leaving the page.
     const phaseModelsTooltip = useMemo(() => {
-        if (!hasEnabledPhases) return undefined;
+        if (!hasMultipleEnabledPhases) return undefined;
         return enabledPhases
             .map(p => `${p.position}. ${p.name || "Phase " + p.position}: ${p.model_id || "default"}`)
             .join(" · ");
-    }, [enabledPhases, hasEnabledPhases]);
+    }, [enabledPhases, hasMultipleEnabledPhases]);
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -568,17 +578,17 @@ export function ProjectPageClient({
                                             </Button>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {hasEnabledPhases ? (
-                                                // Phase-pipeline project: model is fixed by the
-                                                // pipeline definition. Show a static label that
-                                                // tells the user that's the case (and on hover,
-                                                // which models will run, in order).
+                                            {hasMultipleEnabledPhases ? (
+                                                // Multi-phase project: model selection is owned by
+                                                // the pipeline (each phase has its own model). Show
+                                                // a static label instead of a dropdown so users
+                                                // aren't misled into thinking the selector matters.
+                                                // Tooltip on hover lists which models will run.
                                                 <div
                                                     className="h-8 inline-flex items-center gap-1.5 text-xs text-muted-foreground px-2.5 rounded-lg cursor-default select-none"
                                                     title={phaseModelsTooltip}
                                                 >
-                                                    Phase pipeline · {enabledPhases.length}{" "}
-                                                    {enabledPhases.length === 1 ? "phase" : "phases"}
+                                                    Phase pipeline · {enabledPhases.length} phases
                                                 </div>
                                             ) : (
                                                 <DropdownMenu>
