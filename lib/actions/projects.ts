@@ -329,6 +329,51 @@ export async function cloneProject(projectId: string) {
         }
     }
 
+    // 6. Copy project_phases. Phases carry the per-phase system_prompt,
+    // model_id, and order — for projects that run the phase pipeline,
+    // these ARE the "system instructions". Missing this step was the bug
+    // visible as cloned projects having an empty phases panel and the
+    // composer falling back to single-call mode.
+    const { data: phases } = await supabase
+        .from("project_phases")
+        .select("name, position, model_id, system_prompt, enabled")
+        .eq("project_id", projectId)
+        .order("position", { ascending: true });
+
+    if (phases && phases.length > 0) {
+        const newPhases = phases.map((p: any) => ({
+            ...p,
+            project_id: newProjectId,
+        }));
+        const { error: phaseError } = await supabase
+            .from("project_phases")
+            .insert(newPhases);
+        if (phaseError) console.error("Clone - Phases Error:", phaseError);
+    }
+
+    // 7. Copy project_automations (the automation templates: name,
+    // description, prompt_template). Per-task rows (automation_tasks)
+    // are intentionally NOT copied — those are run history, not template
+    // state, and copying them would mislead the user into thinking those
+    // runs happened on the new project. The user can populate fresh rows
+    // via CSV upload or Add row in the cloned project.
+    const { data: automations } = await supabase
+        .from("project_automations")
+        .select("name, description, prompt_template")
+        .eq("project_id", projectId);
+
+    if (automations && automations.length > 0) {
+        const newAutomations = automations.map((a: any) => ({
+            ...a,
+            project_id: newProjectId,
+            created_by: user.id,
+        }));
+        const { error: autoError } = await supabase
+            .from("project_automations")
+            .insert(newAutomations);
+        if (autoError) console.error("Clone - Automations Error:", autoError);
+    }
+
     revalidatePath("/projects");
     return { success: true, newProjectId };
 }
