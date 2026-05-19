@@ -30,13 +30,17 @@ export default async function StandaloneChatPage({ params }: { params: Promise<{
 
     if (!chat) notFound();
 
-    // Fetch messages — order by sequence (server contract); created_at as tiebreaker.
+    // Fetch messages — order by wall-clock time first.
+    // See comment on the project-scoped chat page for full context: the
+    // agent backend resets `sequence` per turn and writes every user-role
+    // row at sequence=0, so primary-sort by sequence stacked all user
+    // messages at the top of multi-turn chats.
     const { data: messages } = await supabase
         .from("chat_messages")
         .select("*")
         .eq("chat_id", chatId)
-        .order("sequence", { ascending: true })
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .order("sequence", { ascending: true });
 
     return (
         <div className="flex flex-col h-full gap-2">
