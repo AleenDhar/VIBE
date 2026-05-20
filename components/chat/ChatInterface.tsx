@@ -44,8 +44,10 @@ interface ChatProps {
 }
 
 export function ChatInterface({ projectId, chatId, initialMessages, initialInput, initialModel, initialImages, automationTaskId, phaseBoundaries }: ChatProps) {
-    // Process initial messages - group thinking/tool steps with final messages
-    const processedInitialMessages = initialMessages.reduce((acc: any[], msg: any) => {
+    // Process initial messages - group thinking/tool steps with final messages.
+    // Extracted as a reusable transform so the polling fallback can rebuild the
+    // FULL timeline from the DB (not just the latest row) when Realtime is down.
+    const buildUiMessages = (rawMessages: any[]) => (rawMessages || []).reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
         const meta = typeof msg.metadata === 'string'
             ? (() => { try { return JSON.parse(msg.metadata) || {}; } catch { return {}; } })()
@@ -173,6 +175,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         return acc;
     }, []);
 
+    const processedInitialMessages = buildUiMessages(initialMessages);
+
     // State definitions
     const [messages, setMessages] = useState<any[]>(processedInitialMessages);
     // Per-phase collapse state. Set holds the phase positions that are
@@ -241,6 +245,20 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const imageInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
     const supabase = createClient();
+
+    // Mirror `messages` into a ref so the polling fallback can read the latest
+    // timeline without listing `messages` as an effect dependency — that
+    // dependency tore down and recreated the 3s interval on every new row,
+    // which produced the observed "stopping/starting polling" churn and
+    // duplicate concurrent loops.
+    const messagesRef = useRef<any[]>(messages);
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+    // True while handleSend is actively reading the SSE stream for THIS client.
+    // The polling fallback must not rebuild from the DB during an active local
+    // stream (single-call mode streams tokens straight into the bubble), or it
+    // would fight those optimistic token-by-token updates.
+    const isStreamingRef = useRef(false);
     // Handle creating a new chat in the same project
     const handleNewChat = async () => {
         if (!projectId || creatingNewChat) return;
@@ -675,58 +693,84 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         };
     }, [chatId, supabase]);
 
-    // Polling fallback when Realtime fails
+    // Polling fallback when Realtime fails.
+    //
+    // Realtime can't always connect (corporate firewalls/proxies block the
+    // WebSocket, or the channel times out). When it isn't connected, rebuild
+    // the ENTIRE timeline from the DB on an interval using the same transform
+    // as the initial server render, so phase/tool/thinking steps appear live
+    // instead of the chat being stuck on "processing". The previous version
+    // fetched only the single latest assistant row into one bubble — it never
+    // reconstructed the timeline and silently dropped empty-content marker
+    // rows (e.g. phase_start), so multi-message phase runs rendered nothing.
     useEffect(() => {
         if (!chatId) return;
-        if (realtimeStatus === 'connected') return; // Only poll if Realtime is not working
+        if (realtimeStatus === 'connected') return; // Realtime owns updates when live
 
         console.log('[Polling] Realtime not connected, starting polling fallback');
-        const interval = setInterval(async () => {
-            // Check if there are any processing messages
-            const processingMsg = messages.find(m => m.role === 'assistant' && m.isProcessing);
-            if (!processingMsg) {
-                return; // Nothing to poll for
-            }
+        let stopped = false;
 
-            console.log('[Polling] Checking for updates...');
+        const poll = async () => {
+            // Don't fight an active local SSE stream — let handleSend own the
+            // UI until its stream finishes, then polling can take over.
+            if (isStreamingRef.current) return;
+            // Only poll while a turn is in flight: an assistant bubble is still
+            // processing, or the last row is a user message awaiting a reply.
+            const cur = messagesRef.current;
+            const inflight = cur.some(m => m.role === 'assistant' && m.isProcessing);
+            const lastMsg = cur[cur.length - 1];
+            const awaitingReply = !!lastMsg && lastMsg.role === 'user';
+            if (!inflight && !awaitingReply) return;
+
             const { data, error } = await supabase
                 .from('chat_messages')
                 .select('*')
                 .eq('chat_id', chatId)
-                .eq('role', 'assistant')
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+                .order('created_at', { ascending: true })
+                .order('sequence', { ascending: true });
 
+            if (stopped) return;
             if (error) {
                 console.error('[Polling] Error fetching messages:', error);
                 return;
             }
+            if (!data || data.length === 0) return;
 
-            if (data && data.content) {
-                console.log('[Polling] Found completed message from DB, updating UI');
-                setMessages(prev => {
-                    const lastAssistantIndex = prev.findIndex(m => m.role === 'assistant' && m.isProcessing);
-                    if (lastAssistantIndex === -1) return prev;
+            const rebuilt = buildUiMessages(data);
+            if (rebuilt.length === 0) return;
 
-                    const updated = [...prev];
-                    updated[lastAssistantIndex] = {
-                        ...updated[lastAssistantIndex],
-                        id: data.id,
-                        content: data.content,
-                        created_at: data.created_at,
-                        isProcessing: false
-                    };
-                    return updated;
-                });
+            setMessages(prev => {
+                // Preserve a just-sent optimistic user message the DB fetch may
+                // not have caught yet, so it doesn't flicker out of the UI.
+                const lastPrev = prev[prev.length - 1];
+                if (
+                    lastPrev &&
+                    lastPrev.role === 'user' &&
+                    !rebuilt.some(m => m.role === 'user' && m.content === lastPrev.content)
+                ) {
+                    return [...rebuilt, lastPrev];
+                }
+                return rebuilt;
+            });
+
+            // Clear the global "Thinking..." spinner once the turn resolved.
+            const stillInflight = rebuilt.some(m => m.role === 'assistant' && m.isProcessing);
+            if (!stillInflight) {
+                setLoading(false);
+                setThinkingText('');
             }
-        }, 3000); // Poll every 3 seconds
+        };
+
+        // Run immediately so the user doesn't wait a full interval for paint.
+        poll();
+        const interval = setInterval(poll, 3000);
 
         return () => {
+            stopped = true;
             console.log('[Polling] Stopping polling fallback');
             clearInterval(interval);
         };
-    }, [chatId, realtimeStatus, messages, supabase]);
+    }, [chatId, realtimeStatus, supabase]);
 
     const handleSend = async (
         messageContent: string = input,
@@ -769,6 +813,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             created_at: new Date().toISOString()
         }]);
 
+        isStreamingRef.current = true;
         try {
             const response = await fetch("/api/chat", {
                 method: "POST",
@@ -997,6 +1042,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             // Actually, keep loading true might be confusing if the stream is dead.
             // Let's set loading false, but the "isProcessing" flag on the message determines the specific UI processing state.
             setLoading(false);
+        } finally {
+            // Always clear the streaming flag so the polling fallback can resume.
+            isStreamingRef.current = false;
         }
     };
 
