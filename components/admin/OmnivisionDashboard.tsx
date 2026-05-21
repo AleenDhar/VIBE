@@ -310,11 +310,17 @@ export function OmnivisionDashboard({
             return true;
         }
 
-        // Match loaded projects and chats if they exist
+        // Match loaded projects and chats if they exist. Also match on
+        // chat/project IDs so pasting a URL's chat ID (the UUID after
+        // /chat/) or project ID jumps straight to the right entry.
         if (user.isLoaded && user.projects) {
             return user.projects.some(p =>
                 (p.project_name || "").toLowerCase().includes(lq) ||
-                p.chats.some(c => (c.title || "").toLowerCase().includes(lq))
+                (p.project_id || "").toLowerCase().includes(lq) ||
+                p.chats.some(c =>
+                    (c.title || "").toLowerCase().includes(lq) ||
+                    c.id.toLowerCase().includes(lq)
+                )
             );
         }
 
