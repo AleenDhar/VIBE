@@ -15,6 +15,7 @@ import {
     X,
     MessageSquare,
     FileSpreadsheet,
+    Download,
     Maximize2,
 } from "lucide-react";
 import {
@@ -342,6 +343,85 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
         }
     };
 
+    // Export every row's full run detail to CSV: prompt, per-row variable
+    // values, the full output of each phase, plus status/timestamps and
+    // per-phase + total cost/token metadata. Built entirely from the in-memory
+    // `tasks` state — no extra fetch. xlsx's sheet_to_csv gives RFC-4180
+    // quoting for free, so multi-line markdown outputs survive intact.
+    const handleExport = async () => {
+        if (tasks.length === 0) return;
+        const XLSX = await import("xlsx");
+
+        // Variable columns: prefer the template's placeholders (stable order);
+        // fall back to the union of keys actually present on the rows.
+        const varKeys =
+            templatePlaceholders.length > 0
+                ? templatePlaceholders
+                : Array.from(new Set(tasks.flatMap(t => Object.keys(t.variables ?? {}))));
+
+        const header = [
+            "#",
+            "Prompt",
+            ...varKeys,
+            ...orderedPhases.flatMap(p => {
+                const label = p.name || `Phase ${p.position}`;
+                return [label, `${label} — Cost (USD)`, `${label} — Tokens`];
+            }),
+            "Status",
+            "Started",
+            "Completed",
+            "Total Cost (USD)",
+            "Total Tokens",
+            "Chat ID",
+            "Error",
+        ];
+
+        const rows = tasks.map((t, i) => {
+            const outs = t.phase_outputs ?? [];
+            const totalCost = outs.reduce((s, o) => s + (o.cost_usd ?? 0), 0);
+            const totalTokens = outs.reduce((s, o) => s + (o.total_tokens ?? 0), 0);
+            return [
+                i + 1,
+                t.prompt ?? "",
+                ...varKeys.map(k => t.variables?.[k] ?? ""),
+                ...orderedPhases.flatMap(p => {
+                    const o = outs.find(x => x.phase_position === p.position);
+                    return [
+                        o?.content ?? "",
+                        o?.cost_usd != null ? o.cost_usd : "",
+                        o?.total_tokens != null ? o.total_tokens : "",
+                    ];
+                }),
+                t.status,
+                t.started_at ?? "",
+                t.completed_at ?? "",
+                totalCost ? Number(totalCost.toFixed(6)) : "",
+                totalTokens || "",
+                t.chat_id ?? "",
+                t.error ?? "",
+            ];
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+        const csv = XLSX.utils.sheet_to_csv(ws);
+        // Prepend a UTF-8 BOM so Excel detects the encoding and renders
+        // non-ASCII characters (em-dashes, accented names) correctly. Build it
+        // from the code point at runtime — a literal U+FEFF in source gets
+        // stripped by the bundler as insignificant whitespace.
+        const bom = String.fromCharCode(0xfeff);
+        const blob = new Blob([bom + csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const safeName = (automation.name || "automation").replace(/[^a-z0-9_-]+/gi, "_");
+        const date = new Date().toISOString().slice(0, 10);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${safeName}-export-${date}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     const handleDeleteRow = async (task: AutomationTask) => {
         if (!confirm("Delete this row?")) return;
         setBusyId(task.id);
@@ -667,6 +747,16 @@ export function AutomationDetailClient({ projectId, automation, initialTasks, in
                         Upload CSV
                     </Button>
                 )}
+                <Button
+                    onClick={handleExport}
+                    variant="outline"
+                    className="gap-2"
+                    disabled={tasks.length === 0}
+                    title="Export all rows and their phase outputs to CSV"
+                >
+                    <Download className="h-4 w-4" />
+                    Export
+                </Button>
                 <div className="flex items-center gap-2 ml-auto">
                     <Switch
                         size="sm"
