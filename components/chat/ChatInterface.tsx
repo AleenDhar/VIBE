@@ -416,19 +416,25 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
         if (lastUserIndex === -1) return; // No user messages
 
-        // Check if there's a final response OR CANCELLATION after this user message
+        // Check if the turn has RESOLVED after this user message — i.e. a final
+        // answer, a cancellation, or a terminal failure. If any of these exist,
+        // the agent is NOT still working and we must not re-arm the spinner.
         const hasFinalResponse = initialMessages
             .slice(lastUserIndex + 1)
             .some(m => {
                 if (m.role === 'assistant') {
                     if (m.type === 'final' || m.type === 'message') return true;
+                    // A terminal failure row (pipeline_failed / phase_error /
+                    // watchdog / budget breaker / raw API error) ends the turn —
+                    // otherwise a failed run re-arms "Thinking…" on every reload.
+                    if (m.type === 'error') return true;
                     // Check for cancellation
                     if ((m.type === 'status' && m.content === 'cancelled') || m.type === 'cancelled' || m.content === 'cancelled') return true;
                 }
                 return false;
             });
 
-        // If no final response and not cancelled, agent is still thinking
+        // If the turn hasn't resolved, the agent is still thinking
         if (!hasFinalResponse) {
             setLoading(true);
             setThinkingText("Thinking...");
