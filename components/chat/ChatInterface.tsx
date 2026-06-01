@@ -905,11 +905,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         }
                                         return next;
                                     });
-                                    setThinkingText(
-                                        data.phase?.name
-                                            ? `Phase ${data.phase.index}/${data.phase.total} — ${data.phase.name}…`
-                                            : `Phase ${data.phase?.index}/${data.phase?.total}…`
-                                    );
+                                    // Phase labels are no longer surfaced in the UI; show a
+                                    // generic working indicator instead of "Phase X/Y…".
+                                    setThinkingText("Working…");
                                     continue;
                                 }
                                 if (data.type === 'phase_end') {
@@ -1484,92 +1482,19 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         }
 
                         const phaseInfo = msg.role === 'assistant' ? msg.metadata?.phase : null;
-                        // Only show the divider at a phase BOUNDARY — i.e.
-                        // when this message's phase position differs from
-                        // the previous message's. Without this guard the
-                        // divider repeats above every chat_message row a
-                        // phase produced (thinking, tool_call, tool_result,
-                        // content), which is several per phase.
-                        const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
-                        const prevPhasePosition = prevMsg?.metadata?.phase?.position ?? null;
-                        const showPhaseDivider = phaseInfo && phaseInfo.position !== prevPhasePosition;
-                        // Phase-start markers from Replit are empty-body rows
-                        // that exist ONLY to trigger the divider. Render the
-                        // divider and skip the (empty) bubble + avatar.
+                        // Phase dividers ("Phase X of Y — Name" + model-id subtitle)
+                        // have been removed from the chat UI. Empty phase-start marker
+                        // rows existed only to render those dividers, so skip them.
                         const isPhaseMarker = msg.metadata?.kind === 'phase_start';
                         if (isPhaseMarker) {
-                            const heading = phaseInfo
-                                ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
-                                : null;
-                            const subtitle = phaseInfo?.model_id || null;
-                            return (
-                                <Fragment key={i}>
-                                    {heading && (
-                                        <div className="flex items-center gap-3 mx-auto w-full max-w-3xl pt-4 pb-1 select-none">
-                                            <div className="h-px flex-1 bg-border/60" />
-                                            <div className="flex flex-col items-center gap-0.5 whitespace-nowrap">
-                                                <span className="text-xs font-semibold tracking-wide text-foreground/80">{heading}</span>
-                                                {subtitle && (
-                                                    <span className="text-[10px] text-muted-foreground/60 font-mono">{subtitle}</span>
-                                                )}
-                                            </div>
-                                            <div className="h-px flex-1 bg-border/60" />
-                                        </div>
-                                    )}
-                                </Fragment>
-                            );
+                            return null;
                         }
-                        const phaseHeading = showPhaseDivider
-                            ? `Phase ${phaseInfo.index}${phaseInfo.total ? ` of ${phaseInfo.total}` : ''}${phaseInfo.name ? ` — ${phaseInfo.name}` : ''}`
-                            : null;
-                        const phaseSubtitle = showPhaseDivider ? (phaseInfo?.model_id || null) : null;
-                        // Hide message body when its phase is collapsed.
-                        // Divider itself still renders so the user can expand.
+                        // Kept inert now that the divider/collapse toggle is gone
+                        // (collapsedPhases can no longer be populated → always false).
                         const inCollapsedPhase = phaseInfo && collapsedPhases.has(phaseInfo.position);
-                        const isPhaseCollapsed = phaseInfo && collapsedPhases.has(phaseInfo.position);
 
                         return (
                         <Fragment key={i}>
-                            {phaseHeading && (
-                                <div className="flex items-center gap-3 mx-auto w-full max-w-3xl pt-4 pb-1 select-none">
-                                    <div className="h-px flex-1 bg-border/60" />
-                                    <button
-                                        type="button"
-                                        onClick={() => togglePhase(phaseInfo!.position)}
-                                        className="flex flex-col items-center gap-0.5 whitespace-nowrap hover:opacity-80 transition-opacity cursor-pointer"
-                                        title={isPhaseCollapsed ? "Click to expand" : "Click to collapse"}
-                                    >
-                                        <span className="text-xs font-semibold tracking-wide text-foreground/80 inline-flex items-center gap-1">
-                                            {isPhaseCollapsed ? (
-                                                <ChevronRight className="h-3 w-3 text-muted-foreground/60" />
-                                            ) : (
-                                                <ChevronDown className="h-3 w-3 text-muted-foreground/60" />
-                                            )}
-                                            {phaseHeading}
-                                        </span>
-                                        {phaseSubtitle && !isPhaseCollapsed && (
-                                            <span className="text-[10px] text-muted-foreground/60 font-mono">
-                                                {phaseSubtitle}
-                                            </span>
-                                        )}
-                                    </button>
-                                    {automationTaskId && (
-                                        <Button
-                                            size="icon"
-                                            variant="ghost"
-                                            className="h-6 w-6 text-emerald-600 hover:text-emerald-700 shrink-0"
-                                            onClick={() => handleRerunFromPhase(phaseInfo!.position)}
-                                            disabled={rerunningPhase !== null}
-                                            title={`Re-run from Phase ${phaseInfo!.position} onwards`}
-                                        >
-                                            {rerunningPhase === phaseInfo!.position
-                                                ? <Loader2 className="h-3 w-3 animate-spin" />
-                                                : <RotateCcw className="h-3 w-3" />}
-                                        </Button>
-                                    )}
-                                    <div className="h-px flex-1 bg-border/60" />
-                                </div>
-                            )}
                         {inCollapsedPhase ? null : (
                         <div className={`flex gap-4 mx-auto w-full max-w-3xl ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                             {msg.role === 'assistant' && (
