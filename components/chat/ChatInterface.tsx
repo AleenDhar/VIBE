@@ -47,7 +47,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     // Process initial messages - group thinking/tool steps with final messages.
     // Extracted as a reusable transform so the polling fallback can rebuild the
     // FULL timeline from the DB (not just the latest row) when Realtime is down.
-    const buildUiMessages = (rawMessages: any[]) => (rawMessages || []).reduce((acc: any[], msg: any) => {
+    const buildUiMessages = (rawMessages: any[]) => {
+        const built = (rawMessages || []).reduce((acc: any[], msg: any) => {
         const type = msg.type || 'message';
         const meta = typeof msg.metadata === 'string'
             ? (() => { try { return JSON.parse(msg.metadata) || {}; } catch { return {}; } })()
@@ -159,6 +160,21 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         content: msg.content || ""
                     });
                 }
+            } else if (type === 'error') {
+                // Terminal failure row from the orchestrator (pipeline_failed,
+                // phase_error, watchdog, budget circuit-breaker, raw API error).
+                // Clear any in-flight placeholder so it stops showing "Thinking…",
+                // then render the error as its own bubble.
+                if (lastMsg && lastMsg.role === 'assistant' && lastMsg.isProcessing) {
+                    lastMsg.isProcessing = false;
+                }
+                acc.push({
+                    ...msg,
+                    metadata: meta,
+                    thinkingSteps: [],
+                    isProcessing: false,
+                    content: msg.content || "",
+                });
             } else {
                 // Unknown type — render as a plain content bubble rather than silently dropping it.
                 // Prevents future server-side message types from disappearing without warning.
@@ -173,7 +189,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             }
         }
         return acc;
-    }, []);
+        }, []);
+
+        // Safety net: if the turn ended on a terminal row (error / final /
+        // cancelled / verifier_report), no assistant bubble should still be
+        // "processing". Guards against a stuck "Thinking…" after a failed or
+        // cancelled run when rebuilt from the DB (initial load + polling).
+        const TERMINAL = new Set(['final', 'error', 'cancelled', 'verifier_report']);
+        for (let i = built.length - 1; i >= 0; i--) {
+            if (built[i].role !== 'assistant') continue;
+            if (TERMINAL.has(built[i].type || 'message')) {
+                for (const m of built) {
+                    if (m.role === 'assistant' && m.isProcessing) m.isProcessing = false;
+                }
+            }
+            break;
+        }
+        return built;
+    };
 
     const processedInitialMessages = buildUiMessages(initialMessages);
 
@@ -588,6 +621,27 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     thinkingSteps: [],
                                     isProcessing: false,
                                 }];
+                            } else if (messageType === 'error') {
+                                // Terminal failure from the orchestrator (pipeline_failed,
+                                // phase_error, watchdog, budget breaker, raw API error).
+                                // Stop the spinner and clear EVERY in-flight placeholder so
+                                // the chat doesn't hang on "Thinking…" forever.
+                                setLoading(false);
+                                setThinkingText("");
+                                const rtErrMeta = typeof newMsg.metadata === 'string'
+                                    ? (() => { try { return JSON.parse(newMsg.metadata) || {}; } catch { return {}; } })()
+                                    : (newMsg.metadata || {});
+                                const cleared = prev.map(m =>
+                                    m.role === 'assistant' && m.isProcessing ? { ...m, isProcessing: false } : m
+                                );
+                                // Idempotent: if the error row is already present, just clear flags.
+                                if (prev.some(m => m.id === newMsg.id)) return cleared;
+                                return [...cleared, {
+                                    ...newMsg,
+                                    metadata: rtErrMeta,
+                                    thinkingSteps: [],
+                                    isProcessing: false,
+                                }];
                             } else if (messageType !== 'final' && messageType !== 'message') {
                                 // Unknown assistant type — append as a new bubble instead of
                                 // falling into the findLastAssistantIndex → overwrite block below
@@ -771,6 +825,25 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             clearInterval(interval);
         };
     }, [chatId, realtimeStatus, supabase]);
+
+    // Watchdog backstop: if a run goes silent — e.g. the orchestrator dies
+    // without writing a terminal row (a hard dispatch 403, a dropped
+    // connection) — don't hang on "Thinking…" forever. The timer resets on
+    // every `messages` change (any token/row is activity), so active runs are
+    // never cut off; it only fires after sustained inactivity while loading.
+    useEffect(() => {
+        if (!loading) return;
+        const WATCHDOG_MS = 180000; // 3 min — matches the server-side stall watchdog
+        const timer = setTimeout(() => {
+            console.warn('[Watchdog] No activity for 180s while loading — clearing spinner');
+            setLoading(false);
+            setThinkingText('');
+            setMessages(prev => prev.map(m =>
+                m.role === 'assistant' && m.isProcessing ? { ...m, isProcessing: false } : m
+            ));
+        }, WATCHDOG_MS);
+        return () => clearTimeout(timer);
+    }, [loading, messages]);
 
     const handleSend = async (
         messageContent: string = input,
