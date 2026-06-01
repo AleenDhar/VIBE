@@ -7,7 +7,7 @@ import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, 
 import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
-import { TodoListRenderer, isTodoMessage } from "@/components/chat/TodoListRenderer";
+import { isTodoMessage } from "@/components/chat/TodoListRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
@@ -1355,6 +1355,29 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         if (msg.role === 'assistant' && msg.isProcessing && !msg.content?.trim() && (!msg.thinkingSteps || msg.thinkingSteps.length === 0)) {
                             return false;
                         }
+                        // Todos feature removed: drop legacy assistant rows whose ONLY
+                        // content is todo output, so they don't leave an empty bubble
+                        // (with a dangling action toolbar) where the card used to be.
+                        // Messages that mix a todo step with real text/tool output are
+                        // kept — the todo steps are hidden individually at render time.
+                        if (msg.role === 'assistant' && !msg.isProcessing) {
+                            const steps = msg.thinkingSteps || [];
+                            const stepContents = steps.map((s: any) =>
+                                typeof s === 'string' ? s : (s?.type === 'tool_group' ? null : s?.content)
+                            );
+                            const hasTodo =
+                                (typeof msg.content === 'string' && isTodoMessage(msg.content)) ||
+                                stepContents.some((c: any) => typeof c === 'string' && isTodoMessage(c));
+                            const contentIsTodoOrEmpty = !msg.content?.trim() || isTodoMessage(msg.content);
+                            const stepsAllTodos = steps.every((s: any, i: number) =>
+                                s?.type !== 'tool_group' &&
+                                typeof stepContents[i] === 'string' &&
+                                isTodoMessage(stepContents[i])
+                            );
+                            if (hasTodo && contentIsTodoOrEmpty && stepsAllTodos) {
+                                return false;
+                            }
+                        }
                         return true;
                     });
 
@@ -1391,19 +1414,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 },
                             };
                         });
-                    let lastTodoMsgIndex = -1;
-                    filteredMessages.forEach((m, mi) => {
-                        if (m.thinkingSteps?.some((s: any) => {
-                            const c = typeof s === 'string' ? s : s.content;
-                            return typeof c === 'string' && isTodoMessage(c);
-                        })) {
-                            lastTodoMsgIndex = mi;
-                        }
-                    });
                     return filteredMessages.map((msg, i) => {
-                        // Hoisted into the closure so the per-step todo render
-                        // can check whether THIS message is the "last todo" one.
-                        const isLastTodoMessage = i === lastTodoMsgIndex;
                         const msgType = msg.type || 'message';
 
                         // verifier_report: standalone verdict bubble (passed = green, failed = amber)
@@ -1708,33 +1719,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                             // longer / markdown-containing content gets full ReactMarkdown.
                                                             const looksLikeMarkdown = /[#*|>\-`\[\]!]/.test(content) || content.length > 120;
 
-                                                            // Render the agent's write_todos output as a styled
-                                                            // checklist instead of raw text.
-                                                            //
-                                                            // Only ONE Todos card renders per chat — the most recent
-                                                            // one. We skip todos in any message that isn't the global
-                                                            // last todo-containing message (pre-computed above), then
-                                                            // within that message we skip everything except the very
-                                                            // last todo step (so two adjacent emits — summary + full
-                                                            // list — don't both show).
+                                                            // Todos feature removed: suppress any legacy write_todos
+                                                            // output (summary lines + full-list dumps) so it never
+                                                            // renders in the chat.
                                                             if (isTodoMessage(content)) {
-                                                                if (!isLastTodoMessage) {
-                                                                    return null;
-                                                                }
-                                                                // Within the last-todo message, only the final todo step renders.
-                                                                const hasLaterTodoInThisMsg = groups.slice(idx + 1).some((g: any) => {
-                                                                    if (!g || g.type === 'tool_group') return false;
-                                                                    const c = typeof g === 'string' ? g : g.content;
-                                                                    return typeof c === 'string' && isTodoMessage(c);
-                                                                });
-                                                                if (hasLaterTodoInThisMsg) {
-                                                                    return null;
-                                                                }
-                                                                return (
-                                                                    <div key={idx} className="mb-2">
-                                                                        <TodoListRenderer content={content} />
-                                                                    </div>
-                                                                );
+                                                                return null;
                                                             }
 
                                                             if (isAgentReasoning || looksLikeMarkdown) {
@@ -1755,10 +1744,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                 </div>
                                             )}
 
-                                            {displayContent && !isDuplicateOfThinkingStep && (
-                                                isTodoMessage(displayContent)
-                                                    ? <TodoListRenderer content={displayContent} />
-                                                    : <MarkdownContent content={displayContent} />
+                                            {displayContent && !isDuplicateOfThinkingStep && !isTodoMessage(displayContent) && (
+                                                <MarkdownContent content={displayContent} />
                                             )}
 
                                             {(msg.isProcessing || (loading && i === messages.length - 1)) && (
