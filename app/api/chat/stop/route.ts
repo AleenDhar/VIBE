@@ -22,8 +22,12 @@ export async function POST(req: NextRequest) {
         const stopUrl = `${baseUrl}/stop?chat_id=${chatId}`;
         console.log(`[API] Stopping chat: ${stopUrl}`);
 
+        const authToken = process.env.DISPATCH_SECRET;
+        const headers: Record<string, string> = { "Content-Length": "0" };
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
         const response = await fetch(stopUrl, {
             method: "POST",
+            headers,
         });
 
         if (!response.ok) {

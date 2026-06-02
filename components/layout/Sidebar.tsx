@@ -21,6 +21,7 @@ import {
     Trash2,
     GitBranch,
     Coins,
+    Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -401,6 +402,27 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                 >
                                     <Coins className="h-[18px] w-[18px] flex-shrink-0" />
                                     <span className={cn(isCollapsed && "md:hidden")}>Usage</span>
+                                </Link>
+                            );
+                        })()}
+                        {/* Super Admin - Executions */}
+                        {userRole === 'super_admin' && (() => {
+                            const isActive = pathname === '/admin/executions' || pathname.startsWith('/admin/executions/');
+                            return (
+                                <Link
+                                    href="/admin/executions"
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                                        isCollapsed ? "md:justify-center md:px-2 md:w-10" : "",
+                                        isActive
+                                            ? "text-amber-600 dark:text-amber-400 font-medium bg-amber-500/10"
+                                            : "text-amber-600/60 dark:text-amber-400/60 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-500/5"
+                                    )}
+                                    title={isCollapsed ? "Executions" : undefined}
+                                    onClick={() => setMobileOpen?.(false)}
+                                >
+                                    <Activity className="h-[18px] w-[18px] flex-shrink-0" />
+                                    <span className={cn(isCollapsed && "md:hidden")}>Executions</span>
                                 </Link>
                             );
                         })()}
