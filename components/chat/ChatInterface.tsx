@@ -854,19 +854,33 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             ? '[Poll] Realtime connected — running in-flight catch-up safety net'
             : '[Poll] Realtime not connected — running full polling fallback');
 
+        // Cheap structural signature used to decide whether a poll actually
+        // changed anything. Without this, reconcileFull returned a brand-new
+        // array every 3s even when the DB was identical — churning the
+        // `messages` reference, which (a) caused needless re-renders and
+        // (b) reset the watchdog timer on every tick so it could never fire.
+        const sig = (arr: any[]) =>
+            arr.map(m =>
+                `${m.role}:${m.id || ''}:${(m.content || '').length}:${m.isProcessing ? 1 : 0}:${(m.thinkingSteps || []).length}`
+            ).join('|');
+
         const reconcileFull = (rebuilt: any[]) => {
             setMessages(prev => {
                 // Preserve a just-sent optimistic user message the DB fetch may
                 // not have caught yet, so it doesn't flicker out of the UI.
                 const lastPrev = prev[prev.length - 1];
-                if (
+                const next = (
                     lastPrev &&
                     lastPrev.role === 'user' &&
                     !rebuilt.some(m => m.role === 'user' && m.content === lastPrev.content)
-                ) {
-                    return [...rebuilt, lastPrev];
-                }
-                return rebuilt;
+                )
+                    ? [...rebuilt, lastPrev]
+                    : rebuilt;
+
+                // No-op if nothing changed — keep the SAME reference so the
+                // watchdog timer (keyed on `messages`) isn't reset spuriously.
+                if (sig(prev) === sig(next)) return prev;
+                return next;
             });
         };
 
@@ -963,20 +977,45 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
 
     // Watchdog backstop: if a run goes silent — e.g. the orchestrator dies
     // without writing a terminal row (a hard dispatch 403, a dropped
-    // connection) — don't hang on "Thinking…" forever. The timer resets on
-    // every `messages` change (any token/row is activity), so active runs are
-    // never cut off; it only fires after sustained inactivity while loading.
+    // connection) — don't hang on "Thinking…" forever.
+    //
+    // It arms whenever EITHER the global spinner is on (`loading`) OR an
+    // assistant bubble is still marked in-flight (`isProcessing`). The latter
+    // is the critical case the earlier version missed: when the SSE stream
+    // times out, the catch block clears `loading` but deliberately keeps the
+    // bubble `isProcessing` (so polling/Realtime can still attach the late
+    // response). With the old `if (!loading) return`, the watchdog never armed
+    // in that state and the bubble showed "Thinking…" forever.
+    //
+    // The timer resets on every real `messages` change (reconcileFull now keeps
+    // a stable reference when the DB is unchanged, so identical poll ticks no
+    // longer reset it). Active runs are never cut off; it only fires after
+    // sustained true silence.
     useEffect(() => {
-        if (!loading) return;
+        const hasInflight = messages.some(m => m.role === 'assistant' && m.isProcessing);
+        if (!loading && !hasInflight) return;
         const WATCHDOG_MS = 180000; // 3 min — matches the server-side stall watchdog
-        console.log(`[Watchdog] Armed (180s timer) at ${new Date().toISOString()}, realtimeStatus=${realtimeStatus}`);
+        console.log(`[Watchdog] Armed (180s timer) at ${new Date().toISOString()}, loading=${loading}, hasInflight=${hasInflight}, realtimeStatus=${realtimeStatus}`);
         const timer = setTimeout(() => {
-            console.warn(`[Watchdog] FIRED — no activity for 180s while loading. realtimeStatus=${realtimeStatus}, isStreaming=${isStreamingRef.current}`);
+            console.warn(`[Watchdog] FIRED — no activity for 180s. loading=${loading}, hasInflight=${hasInflight}, realtimeStatus=${realtimeStatus}, isStreaming=${isStreamingRef.current}`);
             setLoading(false);
             setThinkingText('');
-            setMessages(prev => prev.map(m =>
-                m.role === 'assistant' && m.isProcessing ? { ...m, isProcessing: false } : m
-            ));
+            setMessages(prev => prev.map(m => {
+                if (m.role !== 'assistant' || !m.isProcessing) return m;
+                // Replace the transient "agent still working in background"
+                // optimism with a clear terminal note so the user knows the
+                // run actually stopped — but only if no real content landed.
+                const hasRealContent = (m.content || '')
+                    .replace(/\*\[System Warning\][^*]*\*/g, '')
+                    .trim().length > 0;
+                return {
+                    ...m,
+                    isProcessing: false,
+                    content: hasRealContent
+                        ? m.content
+                        : "*The agent stopped responding (no reply received). It may have failed or timed out — please try sending your message again.*",
+                };
+            }));
         }, WATCHDOG_MS);
         return () => clearTimeout(timer);
     }, [loading, messages]);
