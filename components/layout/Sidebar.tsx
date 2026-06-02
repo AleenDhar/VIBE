@@ -22,6 +22,7 @@ import {
     GitBranch,
     Coins,
     Activity,
+    Table2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -32,6 +33,7 @@ import { toggleStarChat } from "@/lib/actions/chat";
 const menuItems = [
     { name: "Chats", href: "/chats", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
+    { name: "Analysis", href: "/analysis", icon: Table2, adminOnly: true },
     { name: "Workflows", href: "/workflows", icon: GitBranch },
     // { name: "App Builder", href: "/builder", icon: Wand2 },
     // { name: "Users", href: "/users", icon: Users }
@@ -363,7 +365,14 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
 
                     {/* Navigation */}
                     <nav className={cn("space-y-0.5 mb-4", isCollapsed && "flex flex-col items-center")}>
-                        {menuItems.map((item) => {
+                        {menuItems
+                            .filter(
+                                (item) =>
+                                    !(item as { adminOnly?: boolean }).adminOnly ||
+                                    userRole === "admin" ||
+                                    userRole === "super_admin"
+                            )
+                            .map((item) => {
                             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
                             return (
                                 <Link
