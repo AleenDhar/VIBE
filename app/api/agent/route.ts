@@ -36,6 +36,7 @@ function normalizeModel(model: string): string {
         "gpt-5-mini": "openai:gpt-5-mini",
         "claude-sonnet-4-5": "anthropic:claude-sonnet-4-5",
         "claude-sonnet-4-6": "anthropic:claude-sonnet-4-6",
+        "claude-opus-4-8": "anthropic:claude-opus-4-8",
         "grok-3": "grok:grok-3",
         "grok-3-mini": "grok:grok-3-mini",
         "grok-4": "grok:grok-4-0709",
