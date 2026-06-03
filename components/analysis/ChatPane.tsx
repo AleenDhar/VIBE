@@ -13,6 +13,7 @@ import {
     Loader2,
     Sparkles,
     ChevronDown,
+    ChevronRight,
     ChevronsUpDown,
     Paperclip,
     X,
@@ -88,15 +89,27 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     const [uploading, setUploading] = useState(false);
     const [attachError, setAttachError] = useState<string | null>(null);
     const [pendingImages, setPendingImages] = useState<string[]>([]);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const [hasOlder, setHasOlder] = useState(true);
 
     const threadRef = useRef<HTMLDivElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
+    const atBottomRef = useRef(true);
     // Newest created_at when we send, so we only clear the spinner when a
     // terminal row arrives AFTER that (works even though we load a recent
     // window, where the old-final COUNT can shift).
     const baselineAt = useRef("");
     const maxCreatedAt = (rows: ChatRow[]) => rows.reduce((m, r) => (r.created_at > m ? r.created_at : m), "");
+    const PAGE = 400;
+    // Merge incoming rows by id (sorted chrono) so loading older history isn't
+    // wiped by the poll/realtime — they extend the same set.
+    const mergeServerRows = (incoming: ChatRow[]) =>
+        setServerRows((prev) => {
+            const map = new Map(prev.map((r) => [r.id, r]));
+            for (const r of incoming) map.set(r.id, r);
+            return Array.from(map.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
+        });
 
     // Auto-grow the editor up to a cap.
     useEffect(() => {
@@ -131,6 +144,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         if (!chatId) return;
         let active = true;
 
+        setHasOlder(true);
         (async () => {
             // Load the most RECENT window (PostgREST caps at ~1000 rows, and a
             // chat can have thousands), newest-first then reversed to chrono.
@@ -139,22 +153,15 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                 .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
                 .order("created_at", { ascending: false })
-                .limit(400);
-            if (active && rows) {
-                setServerRows(rows.map((r) => toRow(r as Record<string, unknown>)).reverse());
-            }
+                .limit(PAGE);
+            if (!active || !rows) return;
+            setServerRows(rows.map((r) => toRow(r as Record<string, unknown>)).reverse());
+            if (rows.length < PAGE) setHasOlder(false);
         })();
 
         const upsert = (m: Record<string, unknown>) => {
-            const row = toRow(m);
-            setServerRows((prev) => {
-                const i = prev.findIndex((r) => r.id === row.id);
-                if (i === -1) return [...prev, row];
-                const next = [...prev];
-                next[i] = row;
-                return next;
-            });
-            // awaiting is cleared centrally (see effect below) based on terminal count.
+            mergeServerRows([toRow(m)]);
+            // awaiting is cleared centrally (see effect below).
         };
 
         const channel = supabase.channel(`analysis-chat:${chatId}`);
@@ -195,9 +202,9 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                 .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
                 .order("created_at", { ascending: false })
-                .limit(400);
+                .limit(PAGE);
             if (cancelled || !data) return;
-            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)).reverse());
+            mergeServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
         };
         const interval = setInterval(tick, 2500);
         tick();
@@ -259,9 +266,48 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         return out;
     }, [timeline]);
 
+    // Auto-scroll to the latest only when the user is already near the bottom —
+    // don't yank them down while they're reading older history.
     useEffect(() => {
-        threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+        if (atBottomRef.current) {
+            threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+        }
     }, [timeline, awaiting]);
+
+    // Load an older page of history, preserving the scroll position.
+    const loadOlder = async () => {
+        if (loadingOlder || !hasOlder) return;
+        const oldest = serverRows.reduce((m, r) => (!m || r.created_at < m ? r.created_at : m), "");
+        if (!oldest) return;
+        setLoadingOlder(true);
+        try {
+            const { data } = await supabase
+                .from("chat_messages")
+                .select("id, role, type, content, metadata, created_at")
+                .eq("chat_id", chatId)
+                .lt("created_at", oldest)
+                .order("created_at", { ascending: false })
+                .limit(PAGE);
+            const older = (data ?? []).map((r) => toRow(r as Record<string, unknown>));
+            if (older.length < PAGE) setHasOlder(false);
+            if (older.length) {
+                const el = threadRef.current;
+                const prevHeight = el?.scrollHeight ?? 0;
+                mergeServerRows(older);
+                requestAnimationFrame(() => {
+                    if (el) el.scrollTop += el.scrollHeight - prevHeight;
+                });
+            }
+        } finally {
+            setLoadingOlder(false);
+        }
+    };
+
+    const onThreadScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        const el = e.currentTarget;
+        atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        if (el.scrollTop < 80 && hasOlder && !loadingOlder) loadOlder();
+    };
 
     const modelLabel = useMemo(() => {
         const m = models.find((x) => x.id === model);
@@ -420,8 +466,13 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     return (
         <div className="flex h-full flex-col min-h-0">
             {/* Thread */}
-            <div ref={threadRef} className="flex-1 min-h-0 overflow-y-auto">
+            <div ref={threadRef} onScroll={onThreadScroll} className="flex-1 min-h-0 overflow-y-auto">
                 <div className="mx-auto w-full max-w-2xl p-3 space-y-2">
+                {loadingOlder && (
+                    <div className="flex justify-center py-1 text-[11px] text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    </div>
+                )}
                 {timeline.length === 0 ? (
                     <div className="text-xs text-muted-foreground/70 leading-relaxed">
                         Ask the agent to build or analyze this sheet — e.g.{" "}
@@ -678,7 +729,41 @@ function AgentBlock({ events, live }: { events: ChatRow[]; live?: boolean }) {
             {errors.map((e) => (
                 <Row key={e.id} row={e} />
             ))}
-            {finalEvent && <Row key={finalEvent.id} row={finalEvent} />}
+            {finalEvent && <FinalAnswer key={finalEvent.id} row={finalEvent} />}
+        </div>
+    );
+}
+
+// The agent's final answer — collapsible, collapsed by default (answers can be
+// long). Shows a one-line preview when collapsed.
+function FinalAnswer({ row }: { row: ChatRow }) {
+    const [open, setOpen] = useState(false);
+    const preview = (row.content || "")
+        .replace(/[#*`_>~]|\[|\]|\(.*?\)/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 90);
+    return (
+        <div className="mr-6 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+            <button
+                onClick={() => setOpen((o) => !o)}
+                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs transition-colors hover:bg-muted/60"
+            >
+                {open ? (
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="shrink-0 font-medium text-foreground/90">Final answer</span>
+                {!open && preview && (
+                    <span className="truncate text-muted-foreground">— {preview}…</span>
+                )}
+            </button>
+            {open && (
+                <div className="break-words px-3 pb-3 text-sm prose-sm max-w-none overflow-x-auto [&_table]:block [&_table]:overflow-x-auto">
+                    <MarkdownContent content={row.content || ""} compact />
+                </div>
+            )}
         </div>
     );
 }
