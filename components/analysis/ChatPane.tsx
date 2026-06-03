@@ -92,12 +92,11 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     const threadRef = useRef<HTMLDivElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
-    // Count of terminal (final/error) rows at the moment we send, so we only
-    // clear the spinner when a NEW one arrives — not on old answers already in
-    // the loaded history.
-    const terminalAtSend = useRef(0);
-    const countTerminal = (rows: ChatRow[]) =>
-        rows.filter((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error")).length;
+    // Newest created_at when we send, so we only clear the spinner when a
+    // terminal row arrives AFTER that (works even though we load a recent
+    // window, where the old-final COUNT can shift).
+    const baselineAt = useRef("");
+    const maxCreatedAt = (rows: ChatRow[]) => rows.reduce((m, r) => (r.created_at > m ? r.created_at : m), "");
 
     // Auto-grow the editor up to a cap.
     useEffect(() => {
@@ -133,12 +132,17 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         let active = true;
 
         (async () => {
+            // Load the most RECENT window (PostgREST caps at ~1000 rows, and a
+            // chat can have thousands), newest-first then reversed to chrono.
             const { data: rows } = await supabase
                 .from("chat_messages")
                 .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
-                .order("created_at", { ascending: true });
-            if (active && rows) setServerRows(rows.map((r) => toRow(r as Record<string, unknown>)));
+                .order("created_at", { ascending: false })
+                .limit(400);
+            if (active && rows) {
+                setServerRows(rows.map((r) => toRow(r as Record<string, unknown>)).reverse());
+            }
         })();
 
         const upsert = (m: Record<string, unknown>) => {
@@ -190,9 +194,10 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                 .from("chat_messages")
                 .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
-                .order("created_at", { ascending: true });
+                .order("created_at", { ascending: false })
+                .limit(400);
             if (cancelled || !data) return;
-            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
+            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)).reverse());
         };
         const interval = setInterval(tick, 2500);
         tick();
@@ -205,7 +210,15 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     // Clear the spinner only when a NEW terminal row arrives after we sent —
     // counts against the baseline so old answers in history don't end it early.
     useEffect(() => {
-        if (awaiting && countTerminal(serverRows) > terminalAtSend.current) {
+        if (
+            awaiting &&
+            serverRows.some(
+                (r) =>
+                    r.role === "assistant" &&
+                    (r.kind === "final" || r.kind === "error") &&
+                    r.created_at > baselineAt.current
+            )
+        ) {
             setAwaiting(false);
         }
     }, [serverRows, awaiting]);
@@ -323,7 +336,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         ]);
         setPendingImages([]);
         setInput("");
-        terminalAtSend.current = countTerminal(serverRows);
+        baselineAt.current = maxCreatedAt(serverRows);
         setAwaiting(true);
 
         // Persist the user turn to chat_messages (DB history, not localStorage).

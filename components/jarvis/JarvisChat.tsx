@@ -22,7 +22,7 @@ interface ChatRow {
     role: string;
     kind: string | null;
     content: string | null;
-    seq: number;
+    created_at: string;
     tool?: string | null;
     args?: unknown;
 }
@@ -46,7 +46,7 @@ function toRow(m: Record<string, unknown>): ChatRow {
         role: String(m.role ?? "assistant"),
         kind: (m.type as string) ?? (meta.type as string) ?? null,
         content: (m.content as string) ?? null,
-        seq: typeof m.sequence === "number" ? (m.sequence as number) : 0,
+        created_at: String(m.created_at ?? new Date().toISOString()),
         tool: (meta.tool as string) || (meta.name as string) || (meta.tool_name as string) || null,
         args: meta.args ?? null,
     };
@@ -71,10 +71,10 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
     const threadRef = useRef<HTMLDivElement>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
     const sentInitial = useRef(false);
-    // Only clear the spinner on a NEW terminal row (not old answers in history).
-    const terminalAtSend = useRef(0);
-    const countTerminal = (rows: ChatRow[]) =>
-        rows.filter((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error")).length;
+    // Newest created_at at send time, so we clear the spinner only on a terminal
+    // row that arrives after it (robust to the recent-window load).
+    const baselineAt = useRef("");
+    const maxCreatedAt = (rows: ChatRow[]) => rows.reduce((m, r) => (r.created_at > m ? r.created_at : m), "");
 
     useEffect(() => {
         if (!model && (defaultModel || models[0])) setModel(defaultModel || models[0]?.id || "");
@@ -87,16 +87,21 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
         ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }, [input]);
 
-    // Realtime on chat_messages for this chat, ordered by sequence.
+    // Realtime on chat_messages for this chat. Load the most recent window
+    // (newest-first + cap, then reverse) since a chat can exceed PostgREST's
+    // 1000-row default and the recent part is what matters.
     useEffect(() => {
         let active = true;
         (async () => {
             const { data } = await supabase
                 .from("chat_messages")
-                .select("id, role, type, content, metadata, sequence, created_at")
+                .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
-                .order("sequence", { ascending: true });
-            if (active && data) setServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
+                .order("created_at", { ascending: false })
+                .limit(400);
+            if (active && data) {
+                setServerRows(data.map((r) => toRow(r as Record<string, unknown>)).reverse());
+            }
         })();
 
         const upsert = (m: Record<string, unknown>) => {
@@ -143,11 +148,12 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
         const tick = async () => {
             const { data } = await supabase
                 .from("chat_messages")
-                .select("id, role, type, content, metadata, sequence, created_at")
+                .select("id, role, type, content, metadata, created_at")
                 .eq("chat_id", chatId)
-                .order("sequence", { ascending: true });
+                .order("created_at", { ascending: false })
+                .limit(400);
             if (cancelled || !data) return;
-            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
+            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)).reverse());
         };
         const interval = setInterval(tick, 2500);
         tick();
@@ -157,9 +163,17 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
         };
     }, [awaiting, chatId, supabase]);
 
-    // Clear the spinner only when a NEW terminal row arrives after we sent.
+    // Clear the spinner only when a terminal row arrives after we sent.
     useEffect(() => {
-        if (awaiting && countTerminal(serverRows) > terminalAtSend.current) {
+        if (
+            awaiting &&
+            serverRows.some(
+                (r) =>
+                    r.role === "assistant" &&
+                    (r.kind === "final" || r.kind === "error") &&
+                    r.created_at > baselineAt.current
+            )
+        ) {
             setAwaiting(false);
         }
     }, [serverRows, awaiting]);
@@ -171,8 +185,7 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
         const locals = localRows.filter(
             (r) => !(r.role === "user" && serverUser.has((r.content ?? "").trim()))
         );
-        // local rows sort after server rows of the same time; give them a high seq.
-        return [...serverRows, ...locals].sort((a, b) => a.seq - b.seq);
+        return [...serverRows, ...locals].sort((a, b) => a.created_at.localeCompare(b.created_at));
     }, [serverRows, localRows]);
 
     const groups = useMemo(() => {
@@ -213,21 +226,13 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
         if (userId && timeline.length === 0) {
             addJarvisChat(supabase, userId, { id: chatId, title: q.slice(0, 80) }).catch(() => {});
         }
-        // Place the user row just after everything shown so far (and before the
-        // upcoming assistant rows, which get higher integer sequences).
-        const maxSeq = Math.max(
-            0,
-            ...serverRows.map((r) => r.seq),
-            ...localRows.map((r) => r.seq)
-        );
         const localId = `local-${Date.now()}`;
-        const localSeq = maxSeq + 0.5;
         setLocalRows((prev) => [
             ...prev,
-            { id: localId, role: "user", kind: "message", content: q, seq: localSeq },
+            { id: localId, role: "user", kind: "message", content: q, created_at: new Date().toISOString() },
         ]);
         setInput("");
-        terminalAtSend.current = countTerminal(serverRows);
+        baselineAt.current = maxCreatedAt(serverRows);
         setAwaiting(true);
         // Persist the user turn to chat_messages, then fire the agent.
         await postUserMessage(chatId, q);
@@ -260,7 +265,13 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
                       : "Couldn't reach Jarvis.";
             setLocalRows((prev) => [
                 ...prev,
-                { id: `local-err-${Date.now()}`, role: "assistant", kind: "error", content: msg, seq: localSeq + 1 },
+                {
+                    id: `local-err-${Date.now()}`,
+                    role: "assistant",
+                    kind: "error",
+                    content: msg,
+                    created_at: new Date().toISOString(),
+                },
             ]);
             setAwaiting(false);
         }
