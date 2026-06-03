@@ -1,15 +1,12 @@
-import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { randomUUID } from "crypto";
 import { verifyAdmin } from "@/lib/actions/admin";
-import { JarvisWorkspace } from "@/components/jarvis/JarvisWorkspace";
 
 export const dynamic = "force-dynamic";
 
-export default async function JarvisPage() {
+// There is no bare Jarvis page — a conversation always lives at
+// /analysis/jarvis/<chatId>. Mint a fresh id and redirect.
+export default async function JarvisIndexPage() {
     if (!(await verifyAdmin())) redirect("/");
-    return (
-        <Suspense fallback={null}>
-            <JarvisWorkspace />
-        </Suspense>
-    );
+    redirect(`/analysis/jarvis/${randomUUID()}`);
 }

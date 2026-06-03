@@ -101,21 +101,18 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }, [input]);
 
-    // Stable conversation id per analysis (continues the agent conversation and
-    // is the realtime key for chat_messages).
+    // Conversation id for the analysis chat. DEFAULT is the analysis id itself —
+    // deterministic, so the conversation is the SAME across browsers / devices /
+    // prod (localStorage is per-origin, which is why history was missing in
+    // production). "New chat" stores a per-browser override under a separate key.
     useEffect(() => {
-        const key = `analysis:chat:${analysisId}`;
         let id = "";
         try {
-            id = localStorage.getItem(key) || "";
-            if (!id) {
-                id = uuid();
-                localStorage.setItem(key, id);
-            }
+            id = localStorage.getItem(`analysis:chatx:${analysisId}`) || "";
         } catch {
-            id = uuid();
+            /* ignore */
         }
-        setChatId(id);
+        setChatId(id || analysisId);
     }, [analysisId]);
 
     // Seed the model picker once models load.
@@ -123,31 +120,6 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         if (!model && (defaultModel || models[0])) setModel(defaultModel || models[0]?.id || "");
     }, [defaultModel, models, model]);
 
-    // Restore locally-persisted user messages. The agent backend streams its
-    // own (assistant) events into chat_messages but does not reliably persist
-    // the user's turns, so we keep them ourselves keyed by chat_id — otherwise
-    // they'd vanish on reload and the thread would show only agent replies.
-    useEffect(() => {
-        if (!chatId) return;
-        try {
-            const raw = localStorage.getItem(`analysis:msgs:${chatId}`);
-            if (!raw) return;
-            const arr = JSON.parse(raw) as Array<{ id: string; content: string; ts: number }>;
-            const rows: ChatRow[] = arr.map((m) => ({
-                id: m.id,
-                role: "user",
-                kind: "message",
-                content: m.content,
-                created_at: new Date(m.ts).toISOString(),
-            }));
-            setLocalRows((prev) => {
-                const ids = new Set(prev.map((r) => r.id));
-                return [...prev, ...rows.filter((r) => !ids.has(r.id))];
-            });
-        } catch {
-            /* ignore */
-        }
-    }, [chatId]);
 
     // Load history + subscribe to live agent events on chat_messages.
     useEffect(() => {
@@ -204,6 +176,32 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         };
     }, [chatId, supabase]);
 
+    // Polling fallback while a turn is in progress — realtime can be flaky, so
+    // this guarantees the agent's events stream in without a manual reload.
+    useEffect(() => {
+        if (!awaiting) return;
+        let cancelled = false;
+        const tick = async () => {
+            const { data } = await supabase
+                .from("chat_messages")
+                .select("id, role, type, content, metadata, created_at")
+                .eq("chat_id", chatId)
+                .order("created_at", { ascending: true });
+            if (cancelled || !data) return;
+            const rows = data.map((r) => toRow(r as Record<string, unknown>));
+            setServerRows(rows);
+            if (rows.some((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error"))) {
+                setAwaiting(false);
+            }
+        };
+        const interval = setInterval(tick, 2500);
+        tick();
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [awaiting, chatId, supabase]);
+
     // Merge server + optimistic rows; drop optimistic user rows once the server
     // echoes the same content.
     const timeline = useMemo(() => {
@@ -221,13 +219,20 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     // (intermediate thinking/tool-calls hidden, final answer shown).
     const groups = useMemo(() => {
         const out: Array<{ type: "user"; row: ChatRow } | { type: "agent"; events: ChatRow[] }> = [];
+        let current: { type: "agent"; events: ChatRow[] } | null = null;
         for (const row of timeline) {
             if (row.role === "user") {
+                current = null;
                 out.push({ type: "user", row });
             } else {
-                const last = out[out.length - 1];
-                if (last && last.type === "agent") last.events.push(row);
-                else out.push({ type: "agent", events: [row] });
+                if (!current) {
+                    current = { type: "agent", events: [] };
+                    out.push(current);
+                }
+                current.events.push(row);
+                // A terminal row ends the turn so back-to-back agent turns don't
+                // merge into one block (which would hide earlier answers).
+                if (row.kind === "final" || row.kind === "error") current = null;
             }
         }
         return out;
@@ -309,21 +314,11 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
             },
         ]);
         setPendingImages([]);
-        // Persist the user turn (capped) so it survives reloads.
-        try {
-            const key = `analysis:msgs:${chatId}`;
-            const arr = JSON.parse(localStorage.getItem(key) || "[]") as Array<{
-                id: string;
-                content: string;
-                ts: number;
-            }>;
-            arr.push({ id: localId, content: text, ts });
-            localStorage.setItem(key, JSON.stringify(arr.slice(-200)));
-        } catch {
-            /* ignore */
-        }
         setInput("");
         setAwaiting(true);
+
+        // Persist the user turn to chat_messages (DB history, not localStorage).
+        await api.postUserMessage(chatId, text);
 
         // Tools take an analysis_id arg, so tell the agent which analysis to act
         // on (system prompt is the cleanest place — keeps the user message clean).
@@ -374,8 +369,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     const newChat = () => {
         const id = uuid();
         try {
-            localStorage.setItem(`analysis:chat:${analysisId}`, id);
-            localStorage.removeItem(`analysis:msgs:${chatId}`);
+            localStorage.setItem(`analysis:chatx:${analysisId}`, id);
         } catch {
             /* ignore */
         }
@@ -389,25 +383,6 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
 
     return (
         <div className="flex h-full flex-col min-h-0">
-            <div className="flex items-center gap-2 border-b border-border px-3 py-2 shrink-0">
-                <Sparkles className="h-4 w-4 text-violet-500" />
-                <span className="text-sm font-medium">Agent</span>
-                {(data.isRunning || awaiting) && (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-sky-600 dark:text-sky-300">
-                        <Loader2 className="h-3 w-3 animate-spin" /> working…
-                    </span>
-                )}
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="ml-auto h-7 w-7 text-muted-foreground hover:text-foreground"
-                    onClick={newChat}
-                    title="New chat"
-                >
-                    <SquarePen className="h-3.5 w-3.5" />
-                </Button>
-            </div>
-
             {/* Thread */}
             <div ref={threadRef} className="flex-1 min-h-0 overflow-y-auto">
                 <div className="mx-auto w-full max-w-2xl p-3 space-y-2">
@@ -429,7 +404,11 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                         g.type === "user" ? (
                             <Row key={g.row.id} row={g.row} />
                         ) : (
-                            <AgentBlock key={`agent-${i}`} events={g.events} />
+                            <AgentBlock
+                                key={`agent-${i}`}
+                                events={g.events}
+                                live={awaiting && i === groups.length - 1}
+                            />
                         )
                     )
                 )}
@@ -560,6 +539,16 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                         </Button>
 
                         <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground"
+                            onClick={newChat}
+                            title="New chat"
+                        >
+                            <SquarePen className="h-3.5 w-3.5" />
+                        </Button>
+
+                        <Button
                             size="icon"
                             onClick={send}
                             disabled={(!input.trim() && pendingImages.length === 0) || awaiting}
@@ -584,8 +573,11 @@ function formatDuration(ms: number): string {
 // One contiguous run of agent events. Intermediate thinking / tool-calls /
 // interim messages collapse under a "N messages & M actions" toggle; the final
 // answer (and any errors) render expanded below.
-function AgentBlock({ events }: { events: ChatRow[] }) {
+function AgentBlock({ events, live }: { events: ChatRow[]; live?: boolean }) {
     const [open, setOpen] = useState(false);
+    // While the turn is in progress, auto-expand so the tool calls / thinking
+    // stream live; once it finishes it collapses (unless the user opened it).
+    const showSteps = open || !!live;
 
     const textual = events.filter(
         (e) =>
@@ -628,13 +620,17 @@ function AgentBlock({ events }: { events: ChatRow[] }) {
                         onClick={() => setOpen((o) => !o)}
                         className="flex items-center gap-1.5 rounded-md px-1.5 py-1 -mx-1.5 text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
                     >
-                        <ChevronsUpDown className="h-3 w-3 shrink-0" />
+                        {live ? (
+                            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
+                        ) : (
+                            <ChevronsUpDown className="h-3 w-3 shrink-0" />
+                        )}
                         <span>{label}</span>
                         {durMs > 1500 && (
                             <span className="text-muted-foreground/50">· {formatDuration(durMs)}</span>
                         )}
                     </button>
-                    {open && (
+                    {showSteps && (
                         <div className="ml-2 border-l border-border/50 pl-2.5 space-y-1">
                             {intermediate.map((e) => (
                                 <Row key={e.id} row={e} />

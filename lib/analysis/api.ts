@@ -209,6 +209,10 @@ export const runAll = (analysisId: string) =>
 export const stopRun = (analysisId: string) =>
     request<{ status: string }>(`/${analysisId}/stop`, { method: "POST", body: {} });
 
+// Resume an orphaned/stuck run (is_running=false but status still "running").
+export const resumeRun = (analysisId: string) =>
+    request<{ status: string }>(`/${analysisId}/resume`, { method: "POST", body: {} });
+
 export const listRuns = (analysisId: string, limit?: number) =>
     request<{ is_running: boolean; count: number; runs: import("./types").AnalysisRun[] }>(
         `/${analysisId}/runs`,
@@ -261,6 +265,21 @@ export async function sendAgentChat(body: AgentChatBody): Promise<void> {
     // Leave the stream unread — the run continues server-side and emits to
     // chat_messages. Cancel our reader so we don't hold the socket open here.
     res.body?.cancel().catch(() => {});
+}
+
+// Persist a user chat turn to chat_messages (so history lives in the DB, not
+// localStorage). Best-effort — the message still renders optimistically if this
+// fails, and the agent run is never blocked on it.
+export async function postUserMessage(chatId: string, content: string): Promise<void> {
+    try {
+        await fetch("/api/analysis-chat-message", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, content }),
+        });
+    } catch {
+        /* ignore */
+    }
 }
 
 export async function uploadDocument(body: {

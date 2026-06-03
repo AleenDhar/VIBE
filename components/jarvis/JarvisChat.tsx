@@ -8,21 +8,13 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-    Send,
-    Loader2,
-    Sparkles,
-    ChevronDown,
-    ChevronsUpDown,
-    Wrench,
-    AlertTriangle,
-    Settings2,
-} from "lucide-react";
+import { Send, Loader2, Sparkles, ChevronDown, ChevronsUpDown, Wrench } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { createClient } from "@/lib/supabase/client";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { addJarvisChat } from "@/lib/jarvis/history";
 import * as jarvis from "@/lib/jarvis/api";
-import { AnalysisApiError } from "@/lib/analysis/api";
+import { AnalysisApiError, postUserMessage } from "@/lib/analysis/api";
 import type { ModelOption } from "@/lib/analysis/types";
 
 interface ChatRow {
@@ -65,20 +57,11 @@ interface Props {
     userId: string | null;
     models: ModelOption[];
     defaultModel: string | null;
-    enabledCount: number;
     initialMessage?: string;
-    onOpenSettings: () => void;
+    loading?: boolean;
 }
 
-export function JarvisChat({
-    chatId,
-    userId,
-    models,
-    defaultModel,
-    enabledCount,
-    initialMessage,
-    onOpenSettings,
-}: Props) {
+export function JarvisChat({ chatId, userId, models, defaultModel, initialMessage, loading }: Props) {
     const supabase = useMemo(() => createClient(), []);
     const [serverRows, setServerRows] = useState<ChatRow[]>([]);
     const [localRows, setLocalRows] = useState<ChatRow[]>([]);
@@ -149,6 +132,33 @@ export function JarvisChat({
         };
     }, [chatId, supabase]);
 
+    // Polling fallback while a turn is in progress. Realtime postgres_changes
+    // can be flaky (the main app chat uses the same fallback), so this guarantees
+    // the conversation streams in without a manual reload.
+    useEffect(() => {
+        if (!awaiting) return;
+        let cancelled = false;
+        const tick = async () => {
+            const { data } = await supabase
+                .from("chat_messages")
+                .select("id, role, type, content, metadata, sequence, created_at")
+                .eq("chat_id", chatId)
+                .order("sequence", { ascending: true });
+            if (cancelled || !data) return;
+            const rows = data.map((r) => toRow(r as Record<string, unknown>));
+            setServerRows(rows);
+            if (rows.some((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error"))) {
+                setAwaiting(false);
+            }
+        };
+        const interval = setInterval(tick, 2500);
+        tick();
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [awaiting, chatId, supabase]);
+
     const timeline = useMemo(() => {
         const serverUser = new Set(
             serverRows.filter((r) => r.role === "user").map((r) => (r.content ?? "").trim())
@@ -162,12 +172,21 @@ export function JarvisChat({
 
     const groups = useMemo(() => {
         const out: Array<{ type: "user"; row: ChatRow } | { type: "agent"; events: ChatRow[] }> = [];
+        let current: { type: "agent"; events: ChatRow[] } | null = null;
         for (const row of timeline) {
-            if (row.role === "user") out.push({ type: "user", row });
-            else {
-                const last = out[out.length - 1];
-                if (last && last.type === "agent") last.events.push(row);
-                else out.push({ type: "agent", events: [row] });
+            if (row.role === "user") {
+                current = null;
+                out.push({ type: "user", row });
+            } else {
+                if (!current) {
+                    current = { type: "agent", events: [] };
+                    out.push(current);
+                }
+                current.events.push(row);
+                // A terminal row ends the turn so the NEXT assistant rows form a
+                // new block — otherwise back-to-back turns merge and earlier
+                // answers (their `final`) get hidden.
+                if (row.kind === "final" || row.kind === "error") current = null;
             }
         }
         return out;
@@ -185,17 +204,27 @@ export function JarvisChat({
     const send = async (text: string) => {
         const q = text.trim();
         if (!q || awaiting) return;
-        // First turn defines the conversation's history entry (title = first msg).
+        // First turn registers the conversation in the DB (jarvis_chats).
         if (userId && timeline.length === 0) {
-            addJarvisChat(userId, { id: chatId, title: q.slice(0, 80), ts: Date.now() });
+            addJarvisChat(supabase, userId, { id: chatId, title: q.slice(0, 80) }).catch(() => {});
         }
-        const localSeq = 1e9 + localRows.length;
+        // Place the user row just after everything shown so far (and before the
+        // upcoming assistant rows, which get higher integer sequences).
+        const maxSeq = Math.max(
+            0,
+            ...serverRows.map((r) => r.seq),
+            ...localRows.map((r) => r.seq)
+        );
+        const localId = `local-${Date.now()}`;
+        const localSeq = maxSeq + 0.5;
         setLocalRows((prev) => [
             ...prev,
-            { id: `local-${Date.now()}`, role: "user", kind: "message", content: q, seq: localSeq },
+            { id: localId, role: "user", kind: "message", content: q, seq: localSeq },
         ]);
         setInput("");
         setAwaiting(true);
+        // Persist the user turn to chat_messages, then fire the agent.
+        await postUserMessage(chatId, q);
         try {
             await jarvis.sendJarvisChat({
                 messages: [{ role: "user", content: q }],
@@ -229,30 +258,25 @@ export function JarvisChat({
 
     return (
         <div className="flex h-full flex-col min-h-0">
-            {enabledCount === 0 && (
-                <div className="mx-auto mt-3 flex w-full max-w-2xl items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    <AlertTriangle className="h-4 w-4 shrink-0" />
-                    <span>No analyses are enabled for Jarvis yet.</span>
-                    <button onClick={onOpenSettings} className="ml-auto inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline">
-                        <Settings2 className="h-3.5 w-3.5" /> Open settings
-                    </button>
-                </div>
-            )}
-
             {/* Thread */}
             <div ref={threadRef} className="flex-1 min-h-0 overflow-y-auto">
                 <div className="mx-auto w-full max-w-2xl p-3 space-y-2">
-                    {timeline.length === 0 ? (
-                        <div className="text-sm text-muted-foreground/70 leading-relaxed pt-6 text-center">
-                            Ask Jarvis anything across your enabled analyses — e.g.{" "}
-                            <span className="text-foreground/80">&ldquo;Which open opps mention Snowflake?&rdquo;</span>
+                    {loading && timeline.length === 0 ? (
+                        <div className="space-y-3 pt-2">
+                            <Skeleton className="h-16 w-3/4" />
+                            <Skeleton className="ml-auto h-10 w-1/2" />
+                            <Skeleton className="h-24 w-3/4" />
                         </div>
                     ) : (
                         groups.map((g, i) =>
                             g.type === "user" ? (
                                 <UserRow key={g.row.id} row={g.row} />
                             ) : (
-                                <AgentBlock key={`agent-${i}`} events={g.events} />
+                                <AgentBlock
+                                    key={`agent-${i}`}
+                                    events={g.events}
+                                    live={awaiting && i === groups.length - 1}
+                                />
                             )
                         )
                     )}
@@ -375,8 +399,9 @@ function EventRow({ row }: { row: ChatRow }) {
     return null;
 }
 
-function AgentBlock({ events }: { events: ChatRow[] }) {
+function AgentBlock({ events, live }: { events: ChatRow[]; live?: boolean }) {
     const [open, setOpen] = useState(false);
+    const showSteps = open || !!live;
     const textual = events.filter(
         (e) =>
             (e.kind === "final" || e.kind === "message" || !e.kind) &&
@@ -410,10 +435,14 @@ function AgentBlock({ events }: { events: ChatRow[] }) {
                         onClick={() => setOpen((o) => !o)}
                         className="flex items-center gap-1.5 rounded-md px-1.5 py-1 -mx-1.5 text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
                     >
-                        <ChevronsUpDown className="h-3 w-3 shrink-0" />
+                        {live ? (
+                            <Loader2 className="h-3 w-3 shrink-0 animate-spin text-sky-500" />
+                        ) : (
+                            <ChevronsUpDown className="h-3 w-3 shrink-0" />
+                        )}
                         <span>{label}</span>
                     </button>
-                    {open && (
+                    {showSteps && (
                         <div className="ml-2 border-l border-border/50 pl-2.5 space-y-1">
                             {intermediate.map((e) => (
                                 <EventRow key={e.id} row={e} />

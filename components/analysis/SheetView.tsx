@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -57,6 +57,11 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
         column: null,
     });
     const [addRowsOpen, setAddRowsOpen] = useState(false);
+    const [rowRunningId, setRowRunningId] = useState<string | null>(null);
+    const hasAiColumns = columns.some((c) => c.type === "ai");
+    // Live in-memory run flag from GET /runs. The persisted latest_run.status
+    // can freeze on a server restart, so is_running is the truthier signal.
+    const [liveRunning, setLiveRunning] = useState<boolean | null>(null);
 
     // Cell-detail modal. The cell is looked up live from `cellFor` so its
     // content updates in place while a re-run streams in.
@@ -136,6 +141,43 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
         }
     };
 
+    const handleResume = async () => {
+        setRunBusy(true);
+        try {
+            await api.resumeRun(analysisId);
+            setLiveRunning(null); // re-detect on the next poll
+        } catch (err) {
+            flash(err instanceof AnalysisApiError ? err.message : "Failed to resume run.");
+        } finally {
+            setRunBusy(false);
+        }
+    };
+
+    // Poll GET /runs for the live is_running flag while the analysis status says
+    // a run is in progress. Lets us tell "genuinely working" from "stuck".
+    const runStatus = latestRun?.status;
+    useEffect(() => {
+        if (runStatus !== "running") {
+            setLiveRunning(null);
+            return;
+        }
+        let cancelled = false;
+        const tick = async () => {
+            try {
+                const res = await api.listRuns(analysisId, 1);
+                if (!cancelled) setLiveRunning(!!res.is_running);
+            } catch {
+                /* ignore */
+            }
+        };
+        const interval = setInterval(tick, 3000);
+        tick();
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [runStatus, analysisId]);
+
     const handleDeleteColumn = async (col: AnalysisColumn) => {
         if (!confirm(`Delete column "${col.name}"?`)) return;
         try {
@@ -154,18 +196,63 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
         }
     };
 
+    // Run every AI cell in a single row, left-to-right. There's no per-row
+    // endpoint, so we re-run each AI cell in order; the engine allows one
+    // re-run at a time (409 while busy), so we wait out 409s to serialize.
+    const handleRunRow = async (row: AnalysisRow) => {
+        const aiCols = columns.filter((c) => c.type === "ai").sort((a, b) => a.position - b.position);
+        if (aiCols.length === 0) {
+            flash("No AI columns to run in this row.");
+            return;
+        }
+        setRowRunningId(row.id);
+        try {
+            for (const col of aiCols) {
+                let queued = false;
+                for (let attempt = 0; attempt < 60 && !queued; attempt++) {
+                    try {
+                        await api.rerunCell(analysisId, { row_id: row.id, column_id: col.id });
+                        queued = true;
+                    } catch (err) {
+                        // 409 = another (re-)run still active; wait and retry so
+                        // the row's cells run one after another.
+                        if (err instanceof AnalysisApiError && err.status === 409) {
+                            await new Promise((r) => setTimeout(r, 1500));
+                        } else {
+                            throw err;
+                        }
+                    }
+                }
+            }
+            flash("Running this row…");
+        } catch (err) {
+            flash(err instanceof AnalysisApiError ? err.message : "Failed to run row.");
+        } finally {
+            setRowRunningId(null);
+        }
+    };
+
     // Run progress (source of truth = latest_run, not cell counts).
     const done = latestRun?.cells_done ?? 0;
     const total = latestRun?.cells_total ?? null;
     const errors = latestRun?.cells_error ?? 0;
 
+    // statusRunning = persisted DB status; liveRunning = in-memory is_running.
+    const statusRunning = latestRun?.status === "running";
+    const genuinelyRunning = statusRunning && liveRunning !== false; // working (or not yet polled)
+    const stalled = statusRunning && liveRunning === false; // status says running but the engine isn't
+
     return (
         <div className="flex h-full flex-col min-h-0">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2 shrink-0">
-                {isRunning ? (
+                {genuinelyRunning ? (
                     <Button size="sm" variant="destructive" onClick={handleStop} disabled={runBusy} leftIcon={Square}>
                         Stop
+                    </Button>
+                ) : stalled ? (
+                    <Button size="sm" onClick={handleResume} disabled={runBusy} leftIcon={RotateCw}>
+                        Resume
                     </Button>
                 ) : (
                     <Button
@@ -178,7 +265,7 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
                     </Button>
                 )}
 
-                {isRunning && (
+                {genuinelyRunning && (
                     <div className="flex items-center gap-2 text-xs text-sky-600 dark:text-sky-300">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         <span>
@@ -188,7 +275,16 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
                         </span>
                     </div>
                 )}
-                {!isRunning && latestRun?.status === "done" && total != null && (
+                {stalled && (
+                    <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        <span>
+                            run stalled at {done}
+                            {total != null ? `/${total}` : ""} — resume to continue
+                        </span>
+                    </div>
+                )}
+                {!statusRunning && latestRun?.status === "done" && total != null && (
                     <span className="text-xs text-emerald-600 dark:text-emerald-400">
                         last run done · {done}/{total}
                         {errors > 0 && <span className="text-rose-500"> · {errors} errors</span>}
@@ -275,13 +371,29 @@ export function SheetView({ analysisId, data, models, defaultModel }: Props) {
                                         />
                                     ))}
                                     <td className="border-b border-border px-1 align-top">
-                                        <button
-                                            onClick={() => handleDeleteRow(row)}
-                                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-1"
-                                            title="Delete row"
-                                        >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                        </button>
+                                        <div className="flex items-center gap-0.5">
+                                            {hasAiColumns && (
+                                                <button
+                                                    onClick={() => handleRunRow(row)}
+                                                    disabled={rowRunningId === row.id || isRunning}
+                                                    className="opacity-0 group-hover:opacity-100 text-emerald-600 hover:text-emerald-700 transition-opacity p-1 disabled:opacity-30 disabled:cursor-not-allowed"
+                                                    title="Run all AI cells in this row"
+                                                >
+                                                    {rowRunningId === row.id ? (
+                                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                    ) : (
+                                                        <Play className="h-3.5 w-3.5" />
+                                                    )}
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={() => handleDeleteRow(row)}
+                                                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity p-1"
+                                                title="Delete row"
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}

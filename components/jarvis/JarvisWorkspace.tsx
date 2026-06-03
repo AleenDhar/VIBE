@@ -2,13 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { ChevronLeft, Sparkles, MessageSquare, Settings2, SquarePen } from "lucide-react";
 import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { getActiveModels, getUserAllowedModels } from "@/lib/actions/models";
-import * as jarvis from "@/lib/jarvis/api";
 import type { ModelOption } from "@/lib/analysis/types";
 import { JarvisChat } from "./JarvisChat";
 import { JarvisSettings } from "./JarvisSettings";
@@ -18,24 +17,19 @@ const PREFERRED_DEFAULT_MODEL = "anthropic:claude-sonnet-4-6";
 
 type Tab = "chat" | "settings";
 
-export function JarvisWorkspace() {
+export function JarvisWorkspace({ chatId }: { chatId: string }) {
     const router = useRouter();
-    const searchParams = useSearchParams();
-    const urlChat = searchParams.get("chat") || undefined;
 
     const [tab, setTab] = useState<Tab>("chat");
     const [models, setModels] = useState<ModelOption[]>([]);
     const [defaultModel, setDefaultModel] = useState<string | null>(null);
-    const [enabledCount, setEnabledCount] = useState(0);
     const [userId, setUserId] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
 
-    // A locally-generated id for brand-new conversations. The active chat is the
-    // ?chat= param when present (resume from history), else this.
-    const [localChatId, setLocalChatId] = useState<string>(() => uuid());
-    const chatId = urlChat ?? localChatId;
-
-    // Initial message handed off from the landing hero (read once).
-    const [initialMessage, setInitialMessage] = useState<string | undefined>(() => {
+    // Initial message handed off from the landing hero (read once). Because the
+    // page keys this component by chatId, a new conversation remounts fresh and
+    // this is empty unless the hero just set it.
+    const [initialMessage] = useState<string | undefined>(() => {
         if (typeof window === "undefined") return undefined;
         try {
             const m = sessionStorage.getItem("jarvis:initial");
@@ -49,12 +43,7 @@ export function JarvisWorkspace() {
         return undefined;
     });
 
-    const newChat = () => {
-        setInitialMessage(undefined);
-        setLocalChatId(uuid());
-        if (urlChat) router.replace("/analysis/jarvis");
-        setTab("chat");
-    };
+    const newChat = () => router.push(`/analysis/jarvis/${uuid()}`);
 
     // Models + current user.
     useEffect(() => {
@@ -74,16 +63,10 @@ export function JarvisWorkspace() {
                 setDefaultModel(opts.find((o) => o.id === PREFERRED_DEFAULT_MODEL)?.id ?? opts[0]?.id ?? null);
             } catch {
                 /* free-text fallback */
+            } finally {
+                setLoading(false);
             }
         })();
-    }, []);
-
-    // Enabled-analyses count for the chat's empty-state hint.
-    useEffect(() => {
-        jarvis
-            .getJarvisSettings()
-            .then((s) => setEnabledCount((s.enabled_analysis_ids ?? []).length))
-            .catch(() => {});
     }, []);
 
     return (
@@ -104,7 +87,7 @@ export function JarvisWorkspace() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                    <JarvisHistoryMenu userId={userId} />
+                    <JarvisHistoryMenu />
                     <Button variant="outline" size="sm" className="gap-1.5" onClick={newChat}>
                         <SquarePen className="h-4 w-4" />
                         New chat
@@ -147,14 +130,13 @@ export function JarvisWorkspace() {
                         userId={userId}
                         models={models}
                         defaultModel={defaultModel}
-                        enabledCount={enabledCount}
                         initialMessage={initialMessage}
-                        onOpenSettings={() => setTab("settings")}
+                        loading={loading}
                     />
                 </div>
                 {tab === "settings" && (
                     <div className="h-full overflow-y-auto">
-                        <JarvisSettings onChange={setEnabledCount} />
+                        <JarvisSettings />
                     </div>
                 )}
             </div>

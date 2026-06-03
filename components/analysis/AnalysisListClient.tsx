@@ -24,7 +24,7 @@ import {
     Table2,
     SquarePen,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import * as api from "@/lib/analysis/api";
 import { AnalysisApiError } from "@/lib/analysis/api";
@@ -52,7 +52,6 @@ export function AnalysisListClient() {
     const [copyingId, setCopyingId] = useState<string | null>(null);
     const [greeting, setGreeting] = useState("Ask Jarvis");
     const [jarvisInput, setJarvisInput] = useState("");
-    const [userId, setUserId] = useState<string | null>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
 
     const load = async () => {
@@ -76,7 +75,6 @@ export function AnalysisListClient() {
             try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return;
-                setUserId(user.id);
                 const { data } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
                 const name = (data?.full_name || "").trim().split(" ")[0];
                 if (name) setGreeting(`Ready to dig in, ${name}?`);
@@ -100,7 +98,7 @@ export function AnalysisListClient() {
         } catch {
             /* ignore */
         }
-        router.push("/analysis/jarvis");
+        router.push(`/analysis/jarvis/${uuid()}`);
     };
 
     const handleCreate = async () => {
@@ -152,12 +150,10 @@ export function AnalysisListClient() {
                     Analysis
                 </Link>
                 <div className="flex items-center gap-2">
-                    <JarvisHistoryMenu userId={userId} />
-                    <Button size="sm" asChild>
-                        <Link href="/analysis/jarvis" className="gap-1.5">
-                            <SquarePen className="h-4 w-4" />
-                            New chat
-                        </Link>
+                    <JarvisHistoryMenu />
+                    <Button size="sm" className="gap-1.5" onClick={() => router.push(`/analysis/jarvis/${uuid()}`)}>
+                        <SquarePen className="h-4 w-4" />
+                        New chat
                     </Button>
                 </div>
             </div>
