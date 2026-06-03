@@ -71,6 +71,10 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
     const threadRef = useRef<HTMLDivElement>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
     const sentInitial = useRef(false);
+    // Only clear the spinner on a NEW terminal row (not old answers in history).
+    const terminalAtSend = useRef(0);
+    const countTerminal = (rows: ChatRow[]) =>
+        rows.filter((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error")).length;
 
     useEffect(() => {
         if (!model && (defaultModel || models[0])) setModel(defaultModel || models[0]?.id || "");
@@ -104,9 +108,7 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
                 next[i] = row;
                 return next;
             });
-            if (row.role === "assistant" && (row.kind === "final" || row.kind === "error")) {
-                setAwaiting(false);
-            }
+            // awaiting is cleared centrally (see effect below).
         };
 
         const channel = supabase.channel(`jarvis-chat:${chatId}`);
@@ -145,11 +147,7 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
                 .eq("chat_id", chatId)
                 .order("sequence", { ascending: true });
             if (cancelled || !data) return;
-            const rows = data.map((r) => toRow(r as Record<string, unknown>));
-            setServerRows(rows);
-            if (rows.some((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error"))) {
-                setAwaiting(false);
-            }
+            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
         };
         const interval = setInterval(tick, 2500);
         tick();
@@ -158,6 +156,13 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
             clearInterval(interval);
         };
     }, [awaiting, chatId, supabase]);
+
+    // Clear the spinner only when a NEW terminal row arrives after we sent.
+    useEffect(() => {
+        if (awaiting && countTerminal(serverRows) > terminalAtSend.current) {
+            setAwaiting(false);
+        }
+    }, [serverRows, awaiting]);
 
     const timeline = useMemo(() => {
         const serverUser = new Set(
@@ -222,12 +227,26 @@ export function JarvisChat({ chatId, userId, models, defaultModel, initialMessag
             { id: localId, role: "user", kind: "message", content: q, seq: localSeq },
         ]);
         setInput("");
+        terminalAtSend.current = countTerminal(serverRows);
         setAwaiting(true);
         // Persist the user turn to chat_messages, then fire the agent.
         await postUserMessage(chatId, q);
+
+        // Send the prior conversation (user turns + final answers) + the new
+        // message — the backend doesn't reconstruct it from chat_id. `timeline`
+        // is still the pre-send value here.
+        const history = timeline
+            .filter(
+                (r) =>
+                    (r.role === "user" && r.content?.trim()) ||
+                    (r.role === "assistant" && r.kind === "final" && r.content?.trim())
+            )
+            .slice(-40)
+            .map((r) => ({ role: r.role === "user" ? "user" : "assistant", content: r.content as string }));
+
         try {
             await jarvis.sendJarvisChat({
-                messages: [{ role: "user", content: q }],
+                messages: [...history, { role: "user", content: q }],
                 chat_id: chatId,
                 model: model || undefined,
                 headless: true,

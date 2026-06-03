@@ -92,6 +92,12 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
     const threadRef = useRef<HTMLDivElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const taRef = useRef<HTMLTextAreaElement>(null);
+    // Count of terminal (final/error) rows at the moment we send, so we only
+    // clear the spinner when a NEW one arrives — not on old answers already in
+    // the loaded history.
+    const terminalAtSend = useRef(0);
+    const countTerminal = (rows: ChatRow[]) =>
+        rows.filter((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error")).length;
 
     // Auto-grow the editor up to a cap.
     useEffect(() => {
@@ -144,9 +150,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                 next[i] = row;
                 return next;
             });
-            if (row.role === "assistant" && (row.kind === "final" || row.kind === "error")) {
-                setAwaiting(false);
-            }
+            // awaiting is cleared centrally (see effect below) based on terminal count.
         };
 
         const channel = supabase.channel(`analysis-chat:${chatId}`);
@@ -188,11 +192,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
                 .eq("chat_id", chatId)
                 .order("created_at", { ascending: true });
             if (cancelled || !data) return;
-            const rows = data.map((r) => toRow(r as Record<string, unknown>));
-            setServerRows(rows);
-            if (rows.some((r) => r.role === "assistant" && (r.kind === "final" || r.kind === "error"))) {
-                setAwaiting(false);
-            }
+            setServerRows(data.map((r) => toRow(r as Record<string, unknown>)));
         };
         const interval = setInterval(tick, 2500);
         tick();
@@ -201,6 +201,14 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
             clearInterval(interval);
         };
     }, [awaiting, chatId, supabase]);
+
+    // Clear the spinner only when a NEW terminal row arrives after we sent —
+    // counts against the baseline so old answers in history don't end it early.
+    useEffect(() => {
+        if (awaiting && countTerminal(serverRows) > terminalAtSend.current) {
+            setAwaiting(false);
+        }
+    }, [serverRows, awaiting]);
 
     // Merge server + optimistic rows; drop optimistic user rows once the server
     // echoes the same content.
@@ -315,10 +323,24 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         ]);
         setPendingImages([]);
         setInput("");
+        terminalAtSend.current = countTerminal(serverRows);
         setAwaiting(true);
 
         // Persist the user turn to chat_messages (DB history, not localStorage).
         await api.postUserMessage(chatId, text);
+
+        // The backend doesn't reconstruct history from chat_id, so we send the
+        // prior conversation (each turn's user message + final answer) plus the
+        // new message. `timeline` here is still the pre-send value (state update
+        // is async), so it holds the prior turns only.
+        const history = timeline
+            .filter(
+                (r) =>
+                    (r.role === "user" && r.content?.trim()) ||
+                    (r.role === "assistant" && r.kind === "final" && r.content?.trim())
+            )
+            .slice(-40)
+            .map((r) => ({ role: r.role === "user" ? "user" : "assistant", content: r.content as string }));
 
         // Tools take an analysis_id arg, so tell the agent which analysis to act
         // on (system prompt is the cleanest place — keeps the user message clean).
@@ -330,6 +352,7 @@ export function ChatPane({ analysisId, data, models, defaultModel }: Props) {
         try {
             await api.sendAgentChat({
                 messages: [
+                    ...history,
                     {
                         role: "user",
                         content: text,
