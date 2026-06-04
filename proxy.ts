@@ -1,38 +1,14 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { updateSession } from "@/lib/supabase/proxy";
-
-// Admins land on the Analysis workspace instead of /projects.
-async function isAdminUser(request: NextRequest, userId: string): Promise<boolean> {
-    try {
-        const supabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                cookies: {
-                    getAll() {
-                        return request.cookies.getAll();
-                    },
-                    setAll() {
-                        /* read-only here */
-                    },
-                },
-            }
-        );
-        const { data } = await supabase.from("profiles").select("role").eq("id", userId).single();
-        return data?.role === "admin" || data?.role === "super_admin";
-    } catch {
-        return false;
-    }
-}
 
 export async function proxy(request: NextRequest) {
     try {
         const { response, user } = await updateSession(request);
+        const path = request.nextUrl.pathname;
 
         // Helper for creating redirects while preserving updated session cookies
-        const createRedirect = (path: string) => {
-            const redirectUrl = new URL(path, request.url);
+        const createRedirect = (target: string) => {
+            const redirectUrl = new URL(target, request.url);
             const redirectResponse = NextResponse.redirect(redirectUrl);
 
             // Copy cookies from updateSession response (which may contain refreshed auth tokens)
@@ -43,20 +19,25 @@ export async function proxy(request: NextRequest) {
             return redirectResponse;
         };
 
-        // Authenticated users visiting the landing page: admins → Analysis,
-        // everyone else → projects.
-        if (user && request.nextUrl.pathname === "/") {
-            const dest = (await isAdminUser(request, user.id)) ? "/analysis" : "/projects";
-            return createRedirect(dest);
+        // ── Analysis / Jarvis are DEPRECATED ────────────────────────────────
+        // The code is kept but access is gated off. APIs 404; pages redirect.
+        if (path.startsWith("/api/analysis") || path.startsWith("/api/jarvis")) {
+            return NextResponse.json({ error: "Not found" }, { status: 404 });
+        }
+        if (path === "/analysis" || path.startsWith("/analysis/")) {
+            return createRedirect("/projects");
+        }
+
+        // Authenticated users visiting the landing page go to projects.
+        if (user && path === "/") {
+            return createRedirect("/projects");
         }
 
         // Define protected routes (add/remove as needed)
-        const protectedRoutes = ["/chat", "/projects", "/admin", "/omnivision", "/builder", "/analysis"];
+        const protectedRoutes = ["/chat", "/projects", "/admin", "/omnivision", "/builder"];
 
         // Check if current path matches any protected route
-        const isProtectedRoute = protectedRoutes.some(route =>
-            request.nextUrl.pathname.startsWith(route)
-        );
+        const isProtectedRoute = protectedRoutes.some((route) => path.startsWith(route));
 
         // Unauthenticated users trying to access protected routes go to login
         if (!user && isProtectedRoute) {

@@ -22,7 +22,6 @@ import {
     GitBranch,
     Coins,
     Activity,
-    Table2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -33,7 +32,8 @@ import { toggleStarChat } from "@/lib/actions/chat";
 const menuItems = [
     { name: "Chats", href: "/chats", icon: MessageSquare },
     { name: "Projects", href: "/projects", icon: FolderOpen },
-    { name: "Analysis", href: "/analysis", icon: Table2, adminOnly: true },
+    // Analysis feature is deprecated — link hidden (code kept).
+    // { name: "Analysis", href: "/analysis", icon: Table2, adminOnly: true },
     { name: "Workflows", href: "/workflows", icon: GitBranch },
     // { name: "App Builder", href: "/builder", icon: Wand2 },
     // { name: "Users", href: "/users", icon: Users }
