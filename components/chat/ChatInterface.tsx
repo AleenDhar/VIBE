@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, Fragment, useState, useEffect, useRef } from "react";
+import { createElement, Fragment, useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, Mic, FileText as FileIcon, Loader2, Bot, User, MicOff, Square, ChevronDown, ChevronRight, Plus, Download, Image as ImageIcon, X, Brain } from "lucide-react";
@@ -130,7 +130,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             } else if (type === 'status' || type === 'cancelled') {
                 if (type === 'cancelled' || msg.content === 'cancelled') {
                     if (lastMsg && lastMsg.role === 'assistant') {
-                        lastMsg.content = (lastMsg.content || "") + "\n\n*[Task Cancelled]*";
+                        if (!lastMsg.content?.includes("[Task Cancelled]")) {
+                            lastMsg.content = (lastMsg.content || "") + "\n\n*[Task Cancelled]*";
+                        }
                         lastMsg.isProcessing = false;
                     }
                     return acc;
@@ -208,10 +210,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         return built;
     };
 
-    const processedInitialMessages = buildUiMessages(initialMessages);
-
-    // State definitions
-    const [messages, setMessages] = useState<any[]>(processedInitialMessages);
+    // State definitions — lazy initializer avoids running buildUiMessages
+    // on every render (only on mount).
+    const [messages, setMessages] = useState<any[]>(() => buildUiMessages(initialMessages));
     // Per-phase collapse state. Set holds the phase positions that are
     // currently collapsed (everything below the divider is hidden). Default:
     // all expanded.
@@ -257,9 +258,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     };
     const [input, setInput] = useState("");
     const [loading, setLoading] = useState(false);
+    const [stopping, setStopping] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [thinkingText, setThinkingText] = useState("");
     const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'error' | 'disconnected'>('connecting');
+    // Debug: log every realtimeStatus transition
+    const prevRealtimeStatus = useRef(realtimeStatus);
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "openai:gpt-5-mini");
     const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
@@ -277,7 +281,25 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const fileInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const recognitionRef = useRef<any>(null);
-    const supabase = createClient();
+    // Stable ref — createBrowserClient is a singleton in the browser but
+    // calling it in the component body risks referential-equality issues if
+    // the cache is ever evicted. A ref guarantees the same instance across
+    // all renders and effects.
+    const supabaseRef = useRef(createClient());
+    const supabase = supabaseRef.current;
+
+    // Debug: log realtimeStatus transitions
+    useEffect(() => {
+        if (prevRealtimeStatus.current !== realtimeStatus) {
+            console.log(`[DEBUG] realtimeStatus changed: ${prevRealtimeStatus.current} → ${realtimeStatus}`);
+            prevRealtimeStatus.current = realtimeStatus;
+        }
+    }, [realtimeStatus]);
+
+    // Debug: log loading/thinkingText transitions
+    useEffect(() => {
+        console.log(`[DEBUG] loading=${loading}, thinkingText="${thinkingText}", isStreaming=${isStreamingRef.current}`);
+    }, [loading, thinkingText]);
 
     // Mirror `messages` into a ref so the polling fallback can read the latest
     // timeline without listing `messages` as an effect dependency — that
@@ -292,11 +314,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     // stream (single-call mode streams tokens straight into the bubble), or it
     // would fight those optimistic token-by-token updates.
     const isStreamingRef = useRef(false);
-    // Client-measured start time of the in-flight turn. Used to compute an
-    // accurate "generated in" duration from a SINGLE clock — mixing the
-    // optimistic user-message timestamp (client clock) with the assistant's
-    // server timestamp produces garbage when the two clocks are skewed.
-    const turnStartRef = useRef<number | null>(null);
+    // Synchronous one-shot dispatch guard. Unlike `loading` (React state, which
+    // updates asynchronously and can lag a render behind), this ref flips the
+    // instant a submit starts — so a rapid double-click, an IME/Enter quirk, or
+    // a StrictMode double-invoke can't fire two network calls for the same
+    // message before the disabled state flushes. Exactly one run per submit.
+    const sendingRef = useRef(false);
     // Handle creating a new chat in the same project
     const handleNewChat = async () => {
         if (!projectId || creatingNewChat) return;
@@ -360,24 +383,29 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         fetchModels();
     }, [supabase]);
 
-    // Check if user has scrolled up
-    const handleScroll = () => {
+    // Check if user has scrolled up. Uses requestAnimationFrame to defer the
+    // state update, which prevents a re-render cascade when programmatic
+    // scrollTop changes or textarea resize trigger synchronous scroll events.
+    const scrollRAFRef = useRef<number | null>(null);
+    const handleScroll = useCallback(() => {
         if (!scrollRef.current) return;
-        
+
         const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-        // Make the threshold bigger to be more forgiving for dynamic content
-        const isAtBottom = Math.abs(scrollHeight - scrollTop - clientHeight) < 150; 
-        
-        // Use synchronous ref to prevent race conditions with rapidly streaming messages
+        const isAtBottom = Math.abs(scrollHeight - scrollTop - clientHeight) < 150;
+
+        // Synchronous ref update for streaming scroll logic
         userScrolledUp.current = !isAtBottom;
-        
-        // Show/hide floating button
-        if (!isAtBottom && !showScrollButton) {
-            setShowScrollButton(true);
-        } else if (isAtBottom && showScrollButton) {
-            setShowScrollButton(false);
-        }
-    };
+
+        // Defer the button-state update so it never fires inside React's
+        // commit phase (which would count toward "Maximum update depth").
+        if (scrollRAFRef.current) cancelAnimationFrame(scrollRAFRef.current);
+        scrollRAFRef.current = requestAnimationFrame(() => {
+            setShowScrollButton(prev => {
+                const next = !isAtBottom;
+                return next === prev ? prev : next;
+            });
+        });
+    }, []);
     
     // Explicit scroll to bottom handler
     const scrollToBottomAndResume = () => {
@@ -466,7 +494,18 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             console.warn("[Realtime] No chatId provided, skipping subscription.");
             return;
         }
-        console.log(`[Realtime] Setting up subscription for chat:${chatId}`);
+        console.log(`[Realtime] Setting up subscription for chat:${chatId} at ${new Date().toISOString()}`);
+
+        // Timeout: if Realtime hasn't connected within 10s, fall back to polling
+        const connectTimeout = setTimeout(() => {
+            setRealtimeStatus(prev => {
+                if (prev === 'connecting') {
+                    console.warn('[Realtime] Connection timeout after 10s — falling back to polling');
+                    return 'error';
+                }
+                return prev;
+            });
+        }, 10_000);
 
         const channel = supabase
             .channel(`chat:${chatId}`)
@@ -581,6 +620,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     setThinkingText("");
                                     return prev.map((msg, index, array) => {
                                         if (index !== findLastAssistantIndex(array)) return msg;
+                                        if (msg.content?.includes("[Task Cancelled]")) {
+                                            return { ...msg, isProcessing: false };
+                                        }
                                         return {
                                             ...msg,
                                             content: (msg.content || "") + "\n\n*[Task Cancelled]*",
@@ -613,6 +655,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                 setThinkingText("");
                                 return prev.map((msg, index, array) => {
                                     if (index !== findLastAssistantIndex(array)) return msg;
+                                    if (msg.content?.includes("[Task Cancelled]")) {
+                                        return { ...msg, isProcessing: false };
+                                    }
                                     return {
                                         ...msg,
                                         content: (msg.content || "") + "\n\n*[Task Cancelled]*",
@@ -678,17 +723,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         ...existing,
                                         content: newMsg.content || existing.content,
                                         created_at: newMsg.created_at,
-                                        isProcessing: false,
-                                        // Single-clock generation time (see turnStartRef).
-                                        generationMs: (messageType === 'final' && turnStartRef.current != null)
-                                            ? Date.now() - turnStartRef.current
-                                            : existing.generationMs,
+                                        isProcessing: false
                                     };
                                     console.log("[Realtime] Updated existing message");
 
                                     // Stop loading indicator when final response arrives
                                     if (messageType === 'final') {
-                                        if (turnStartRef.current != null) turnStartRef.current = null;
                                         setLoading(false);
                                         setThinkingText("");
                                     }
@@ -713,17 +753,12 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                     content: newMsg.content || targetMsg.content, // Keep existing content if new is empty (unlikely for final)
                                     created_at: newMsg.created_at,
                                     isProcessing: messageType !== 'final', // Only stop processing if it's final
-                                    thinkingSteps: targetMsg.thinkingSteps, // Preserve thinking steps we built up
-                                    // Single-clock generation time (see turnStartRef).
-                                    generationMs: (messageType === 'final' && turnStartRef.current != null)
-                                        ? Date.now() - turnStartRef.current
-                                        : targetMsg.generationMs,
+                                    thinkingSteps: targetMsg.thinkingSteps // Preserve thinking steps we built up
                                 };
                                 console.log("[Realtime] Successfully reconciled!");
 
                                 // Stop loading indicator when final response arrives
                                 if (messageType === 'final') {
-                                    if (turnStartRef.current != null) turnStartRef.current = null;
                                     setLoading(false);
                                     setThinkingText("");
                                 }
@@ -745,24 +780,30 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 }
             )
             .subscribe((status) => {
-                console.log(`[Realtime] Subscription status for chat:${chatId}:`, status);
+                console.log(`[Realtime] Subscription status for chat:${chatId}: ${status} at ${new Date().toISOString()}`);
                 if (status === 'SUBSCRIBED') {
+                    clearTimeout(connectTimeout);
                     setRealtimeStatus('connected');
-                    console.log('[Realtime] Successfully connected');
+                    console.log('[Realtime] Successfully connected — polling fallback will be disabled');
                 } else if (status === 'CHANNEL_ERROR') {
+                    clearTimeout(connectTimeout);
                     setRealtimeStatus('error');
-                    console.error('[Realtime] Channel error - connection failed');
+                    console.error('[Realtime] Channel error — falling back to polling');
                 } else if (status === 'TIMED_OUT') {
+                    clearTimeout(connectTimeout);
                     setRealtimeStatus('error');
-                    console.warn('[Realtime] Connection timed out - this may be a WebSocket connectivity issue');
-                    console.warn('[Realtime] Check: 1) Network connection 2) Firewall settings 3) Supabase project status');
+                    console.warn('[Realtime] Connection timed out — falling back to polling');
                 } else if (status === 'CLOSED') {
+                    clearTimeout(connectTimeout);
                     setRealtimeStatus('disconnected');
-                    console.log('[Realtime] Connection closed');
+                    console.warn('[Realtime] Connection closed — falling back to polling');
+                } else {
+                    console.log(`[Realtime] Unhandled status: ${status}`);
                 }
             });
 
         return () => {
+            clearTimeout(connectTimeout);
             console.log(`[Realtime] Cleaning up subscription for chat:${chatId}`);
             supabase.removeChannel(channel);
         };
@@ -780,14 +821,56 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     // rows (e.g. phase_start), so multi-message phase runs rendered nothing.
     useEffect(() => {
         if (!chatId) return;
-        const connected = realtimeStatus === 'connected';
+        if (realtimeStatus === 'connected') {
+            console.log('[Polling] Realtime is connected — polling disabled');
+            return;
+        }
+
+        console.log(`[Polling] Realtime status="${realtimeStatus}" — starting polling fallback at ${new Date().toISOString()}`);
         let stopped = false;
+        let pollCount = 0;
 
-        console.log(connected
-            ? '[Poll] Realtime connected — running in-flight catch-up safety net'
-            : '[Poll] Realtime not connected — running full polling fallback');
+        const poll = async () => {
+            pollCount++;
+            // Don't fight an active local SSE stream — let handleSend own the
+            // UI until its stream finishes, then polling can take over.
+            if (isStreamingRef.current) {
+                console.log(`[Polling] tick #${pollCount} — skipped (SSE stream active)`);
+                return;
+            }
+            // Only poll while a turn is in flight: an assistant bubble is still
+            // processing, or the last row is a user message awaiting a reply.
+            const cur = messagesRef.current;
+            const inflight = cur.some(m => m.role === 'assistant' && m.isProcessing);
+            const lastMsg = cur[cur.length - 1];
+            const awaitingReply = !!lastMsg && lastMsg.role === 'user';
+            if (!inflight && !awaitingReply) {
+                console.log(`[Polling] tick #${pollCount} — skipped (nothing in-flight, last role=${lastMsg?.role}, inflight=${inflight})`);
+                return;
+            }
 
-        const reconcileFull = (rebuilt: any[]) => {
+            console.log(`[Polling] tick #${pollCount} — fetching messages (inflight=${inflight}, awaitingReply=${awaitingReply})`);
+            const { data, error } = await supabase
+                .from('chat_messages')
+                .select('*')
+                .eq('chat_id', chatId)
+                .order('created_at', { ascending: true })
+                .order('sequence', { ascending: true });
+
+            if (stopped) return;
+            if (error) {
+                console.error(`[Polling] tick #${pollCount} — DB error:`, error);
+                return;
+            }
+            if (!data || data.length === 0) {
+                console.log(`[Polling] tick #${pollCount} — no messages in DB yet`);
+                return;
+            }
+
+            console.log(`[Polling] tick #${pollCount} — got ${data.length} rows from DB, rebuilding UI`);
+            const rebuilt = buildUiMessages(data);
+            if (rebuilt.length === 0) return;
+
             setMessages(prev => {
                 // Preserve a just-sent optimistic user message the DB fetch may
                 // not have caught yet, so it doesn't flicker out of the UI.
@@ -801,87 +884,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 }
                 return rebuilt;
             });
-        };
 
-        // The latest turn has resolved in the DB when there is at least one
-        // assistant message after the last user message and none of them is
-        // still processing (the backend now always writes a terminal
-        // final/error row, so this flips reliably when a turn ends).
-        const turnResolvedInDb = (rebuilt: any[]) => {
-            let lastUser = -1;
-            for (let k = rebuilt.length - 1; k >= 0; k--) {
-                if (rebuilt[k].role === 'user') { lastUser = k; break; }
-            }
-            const after = (lastUser >= 0 ? rebuilt.slice(lastUser + 1) : rebuilt)
-                .filter(m => m.role === 'assistant');
-            return after.length > 0 && after.every(m => !m.isProcessing);
-        };
-
-        const poll = async () => {
-            // Don't fight an active local SSE stream — let handleSend own the
-            // UI until its stream finishes, then polling can take over.
-            if (isStreamingRef.current) return;
-            // Only act while a turn is in flight: an assistant bubble is still
-            // processing, or the last row is a user message awaiting a reply.
-            // When Realtime is healthy it clears these promptly, so this gate
-            // means the connected catch-up only fires when the UI is genuinely
-            // behind (a dropped Realtime event) — zero interference otherwise.
-            const cur = messagesRef.current;
-            const inflight = cur.some(m => m.role === 'assistant' && m.isProcessing);
-            const lastMsg = cur[cur.length - 1];
-            const awaitingReply = !!lastMsg && lastMsg.role === 'user';
-            if (!inflight && !awaitingReply) return;
-
-            const { data, error } = await supabase
-                .from('chat_messages')
-                .select('*')
-                .eq('chat_id', chatId)
-                .order('created_at', { ascending: true })
-                .order('sequence', { ascending: true });
-
-            if (stopped) return;
-            if (error) {
-                console.error('[Poll] Error fetching messages:', error);
-                return;
-            }
-            if (!data || data.length === 0) return;
-
-            const rebuilt = buildUiMessages(data);
-            if (rebuilt.length === 0) return;
-            const resolved = turnResolvedInDb(rebuilt);
-
-            if (connected) {
-                // CATCH-UP MODE: Realtime drives live updates. We only step in
-                // when the UI is still showing in-flight (above gate) but the DB
-                // shows the turn has actually finished — i.e. a Realtime event
-                // (typically the terminal 'final'/'error') was dropped. This is
-                // the "reply only appears after a manual reload" bug.
-                if (resolved) {
-                    console.warn('[Poll] Catch-up: DB turn resolved but UI still in-flight — reconciling (missed Realtime event)');
-                    reconcileFull(rebuilt);
-                    setLoading(false);
-                    setThinkingText('');
-                }
-                return;
-            }
-
-            // FALLBACK MODE (Realtime down): render the whole timeline live so
-            // tool/thinking/phase steps still appear.
-            reconcileFull(rebuilt);
-            if (resolved) {
+            // Clear the global "Thinking..." spinner once the turn resolved.
+            const stillInflight = rebuilt.some(m => m.role === 'assistant' && m.isProcessing);
+            console.log(`[Polling] tick #${pollCount} — rebuilt ${rebuilt.length} UI messages, stillInflight=${stillInflight}`);
+            if (!stillInflight) {
+                console.log(`[Polling] tick #${pollCount} — turn resolved, clearing spinner`);
                 setLoading(false);
                 setThinkingText('');
             }
         };
 
-        // Run immediately (covers catch-up after a (re)subscribe gap, and avoids
-        // waiting a full interval for first paint when Realtime is down).
+        // Run immediately so the user doesn't wait a full interval for paint.
         poll();
-        const interval = setInterval(poll, connected ? 3500 : 3000);
+        const interval = setInterval(poll, 3000);
 
         return () => {
             stopped = true;
-            console.log('[Poll] Stopping');
+            console.log('[Polling] Stopping polling fallback');
             clearInterval(interval);
         };
     }, [chatId, realtimeStatus, supabase]);
@@ -894,8 +914,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     useEffect(() => {
         if (!loading) return;
         const WATCHDOG_MS = 180000; // 3 min — matches the server-side stall watchdog
+        console.log(`[Watchdog] Armed (180s timer) at ${new Date().toISOString()}, realtimeStatus=${realtimeStatus}`);
         const timer = setTimeout(() => {
-            console.warn('[Watchdog] No activity for 180s while loading — clearing spinner');
+            console.warn(`[Watchdog] FIRED — no activity for 180s while loading. realtimeStatus=${realtimeStatus}, isStreaming=${isStreamingRef.current}`);
             setLoading(false);
             setThinkingText('');
             setMessages(prev => prev.map(m =>
@@ -911,6 +932,18 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         overrideModel?: string
     ) => {
         if (!messageContent.trim() && (overrideImages?.length || pendingImages.length) === 0 && pendingDocuments.length === 0) return;
+
+        // ── Synchronous double-dispatch guard ────────────────────────────────
+        // Fires before any re-render flushes, so two near-simultaneous submits
+        // (double-click, Enter twice, StrictMode remount) can't both reach the
+        // network. The matching reset lives in the finally block below. Empty
+        // submits return above WITHOUT touching this ref, so they never lock it.
+        if (sendingRef.current) {
+            console.warn('[handleSend] Ignored — a send is already in flight for this chat');
+            return;
+        }
+        sendingRef.current = true;
+        // ─────────────────────────────────────────────────────────────────────
 
         const imagesToSend = overrideImages || [...pendingImages];
         setPendingImages([]);
@@ -932,7 +965,6 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         setInput("");
         setLoading(true);
         setThinkingText("Thinking...");
-        turnStartRef.current = Date.now(); // start the single-clock generation timer
         userScrolledUp.current = false; // Force scroll to bottom when user sends a message
         setShowScrollButton(false);
 
@@ -948,6 +980,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }]);
 
         isStreamingRef.current = true;
+        console.log(`[handleSend] Starting fetch to /api/chat at ${new Date().toISOString()}, realtimeStatus=${realtimeStatus}`);
         try {
             const response = await fetch("/api/chat", {
                 method: "POST",
@@ -965,6 +998,55 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     model: overrideModel || model
                 })
             });
+
+            console.log(`[handleSend] Fetch returned status=${response.status} at ${new Date().toISOString()}`);
+
+            // ── 409 Conflict: a run is already in progress for this chat ──────
+            // The backend enforces one run per chat_id. A 409 means our submit
+            // was a duplicate and was correctly ignored — the ORIGINAL run is
+            // still streaming. This is NOT a failure: do not retry, do not error,
+            // and do not clear the loading state (the real run is still going).
+            // Reconcile the UI from the DB so the canonical timeline of the
+            // in-flight run replaces our optimistic duplicate bubbles, then keep
+            // showing it. The Stop button stays available so the user can cancel
+            // the current run before sending a new message.
+            if (response.status === 409) {
+                console.warn('[handleSend] 409 — a run is already in progress for this chat; keeping the original run.');
+                await response.text().catch(() => undefined); // drain body
+                setThinkingText('Already working on your last message…');
+
+                // Pull the authoritative state from the DB and rebuild the
+                // timeline (same transform as the polling fallback), so the
+                // duplicate user/assistant bubbles we optimistically pushed are
+                // replaced by the original run's real rows.
+                try {
+                    const { data } = await supabase
+                        .from('chat_messages')
+                        .select('*')
+                        .eq('chat_id', chatId)
+                        .order('created_at', { ascending: true })
+                        .order('sequence', { ascending: true });
+                    if (data && data.length > 0) {
+                        const rebuilt = buildUiMessages(data);
+                        if (rebuilt.length > 0) {
+                            setMessages(rebuilt);
+                            const stillInflight = rebuilt.some(
+                                (m: any) => m.role === 'assistant' && m.isProcessing
+                            );
+                            // Keep loading true while the original run is live so
+                            // the composer stays gated and the Stop button shows.
+                            setLoading(stillInflight);
+                            if (!stillInflight) setThinkingText('');
+                        }
+                    }
+                } catch (reconcileErr) {
+                    console.error('[handleSend] 409 reconcile failed:', reconcileErr);
+                }
+                // The finally block clears sendingRef/isStreamingRef so the
+                // Realtime subscription (or polling) can keep updating the run.
+                return;
+            }
+            // ─────────────────────────────────────────────────────────────────
 
             if (!response.ok) {
                 const errText = await response.text();
@@ -987,14 +1069,19 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             const decoder = new TextDecoder();
 
             if (reader) {
-                console.log("[ChatInterface] Reading stream...");
+                console.log(`[handleSend] SSE reader acquired, starting stream read at ${new Date().toISOString()}`);
                 let buffer = "";
+                let chunkCount = 0;
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
                     const chunk = decoder.decode(value, { stream: true });
+                    chunkCount++;
+                    if (chunkCount <= 5 || chunkCount % 20 === 0) {
+                        console.log(`[handleSend] SSE chunk #${chunkCount}, size=${chunk.length}`);
+                    }
                     buffer += chunk;
 
                     const lines = buffer.split("\n\n");
@@ -1117,10 +1204,6 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                         if (data.content && data.content.length > (lastMsg.content || "").length) {
                                             newMessages[lastMsgIndex].content = data.content;
                                         }
-                                        if (turnStartRef.current != null) {
-                                            newMessages[lastMsgIndex].generationMs = Date.now() - turnStartRef.current;
-                                            turnStartRef.current = null;
-                                        }
                                         setShowUsage(true);
                                     } else if (data.type === 'error') {
                                         newMessages[lastMsgIndex].content += `\n\nError: ${data.content}`;
@@ -1142,7 +1225,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         }
                     }
                 }
-                console.log("[ChatInterface] Stream finished.");
+                console.log(`[handleSend] Stream finished after ${chunkCount} chunks at ${new Date().toISOString()}`);
 
                 // Track spend after stream completes (server computes delta)
                 fetch("/api/usage/track-spend", {
@@ -1152,11 +1235,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 }).catch(trackErr => {
                     console.error("[ChatInterface] Spend tracking error:", trackErr);
                 });
+            } else {
+                console.warn('[handleSend] No reader available from response body');
             }
+            console.log(`[handleSend] Stream path complete — calling setLoading(false). realtimeStatus=${realtimeStatus}`);
             setLoading(false);
 
         } catch (e: any) {
-            console.error("Chat Error:", e);
+            console.error(`[handleSend] Error at ${new Date().toISOString()}:`, e);
             setMessages(prev => {
                 // If we have a pending message, mark it as waiting for the background process instead of showing a hard error
                 // This allows the Realtime subscription to eventually pick up the result
@@ -1173,22 +1259,28 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 // Only if no message was processing do we append a new error
                 return [...prev, { role: "assistant", content: `Error: ${e.message || "Failed to start chat."}` }];
             });
-            // We do NOT set loading to false if we believe the background agent is working, 
+            // We do NOT set loading to false if we believe the background agent is working,
             // but the timeout forces us to stop the local spinner logic.
             // Actually, keep loading true might be confusing if the stream is dead.
             // Let's set loading false, but the "isProcessing" flag on the message determines the specific UI processing state.
+            console.log(`[handleSend] Error path — calling setLoading(false). realtimeStatus=${realtimeStatus}`);
             setLoading(false);
         } finally {
             // Always clear the streaming flag so the polling fallback can resume.
+            console.log(`[handleSend] finally — clearing isStreamingRef + sendingRef. realtimeStatus=${realtimeStatus}`);
             isStreamingRef.current = false;
+            // Release the one-shot dispatch guard so the next genuine submit can
+            // proceed. Loading state (not this ref) gates the UI while a run is
+            // live, so clearing it here is safe even on the 409 path.
+            sendingRef.current = false;
         }
     };
 
     const handleStop = async () => {
-        if (!chatId) return;
+        if (!chatId || stopping) return;
 
         console.log("Stopping chat:", chatId);
-        // Optimistic UI update - show we are stopping
+        setStopping(true);
         setThinkingText("Stopping...");
 
         try {
@@ -1230,6 +1322,8 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         } catch (e) {
             console.error("Error stopping chat:", e);
             setThinkingText("Failed to stop");
+        } finally {
+            setStopping(false);
         }
     };
 
@@ -1876,21 +1970,16 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                     </DropdownMenu>
                                                     <div className="flex-1" />
                                                     {(function () {
-                                                        const fmt = (seconds: number) => seconds < 1 ? "<1s" : `${seconds.toFixed(1)}s`;
+                                                        // Calculate time difference
                                                         let duration = null;
-                                                        // Preferred: client-measured elapsed for the live turn — a single
-                                                        // clock, immune to client/server clock skew.
-                                                        if (typeof msg.generationMs === 'number' && msg.generationMs >= 0) {
-                                                            duration = fmt(msg.generationMs / 1000);
-                                                        } else if (i > 0) {
-                                                            // Fallback (reloaded history): both timestamps come from the DB
-                                                            // (server clock), so the diff is reliable. Guard against absurd
-                                                            // values (clock skew on a live optimistic user msg, bad data).
+                                                        if (i > 0) {
                                                             const prevMsg = messages[i - 1];
                                                             if (prevMsg.role === 'user' && prevMsg.created_at && msg.created_at) {
-                                                                const diff = (new Date(msg.created_at).getTime() - new Date(prevMsg.created_at).getTime()) / 1000;
-                                                                if (diff > 0 && diff < 6 * 3600) {
-                                                                    duration = fmt(diff);
+                                                                const start = new Date(prevMsg.created_at).getTime();
+                                                                const end = new Date(msg.created_at).getTime();
+                                                                const diff = (end - start) / 1000;
+                                                                if (diff > 0) {
+                                                                    duration = diff < 1 ? "<1s" : `${diff.toFixed(1)}s`;
                                                                 }
                                                             }
                                                         }
@@ -1997,6 +2086,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                                 e.preventDefault();
+                                // Ignore Enter while a run is in flight or being
+                                // dispatched — the disabled textarea normally
+                                // blocks this, but guard explicitly so an Enter
+                                // that races the state flush can't double-submit.
+                                if (loading || stopping || sendingRef.current) return;
                                 handleSend();
                             }
                         }}
@@ -2070,15 +2164,17 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                         </DropdownMenu>
                         <Button
                             onClick={() => loading ? handleStop() : handleSend()}
-                            disabled={(!loading && !input.trim() && pendingImages.length === 0)}
+                            disabled={stopping || (!loading && !input.trim() && pendingImages.length === 0)}
                             size="icon"
                             className={`h-8 w-8 rounded-lg transition-all ${loading
                                 ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground"
                                 : "bg-primary hover:bg-primary/90 text-primary-foreground"
                                 }`}
-                            title={loading ? "Stop generating" : "Send message"}
+                            title={stopping ? "Stopping..." : loading ? "Stop generating" : "Send message"}
                         >
-                            {loading ? (
+                            {stopping ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : loading ? (
                                 <Square className="h-4 w-4 fill-current" />
                             ) : (
                                 <Send className="h-4 w-4" />
