@@ -12,7 +12,7 @@ export async function GET(
   }
 
   const { chat_id } = await params;
-  const agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+  const agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
 
   try {
     const res = await fetch(`${agentApiUrl}/api/usage/${chat_id}`, {

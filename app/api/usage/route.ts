@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   const limit = request.nextUrl.searchParams.get("limit") || "100";
   const offset = request.nextUrl.searchParams.get("offset") || "0";
-  const agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+  const agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
 
   try {
     const res = await fetch(`${agentApiUrl}/api/usage?limit=${limit}&offset=${offset}`, {

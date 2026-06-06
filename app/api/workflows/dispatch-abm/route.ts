@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
         // 4. Fire async request to DeepAgent
         const agentApiUrl =
             process.env.AGENT_API_URL ||
-            "https://agent-salesforce-link.replit.app";
+            "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
         const asyncUrl = `${agentApiUrl.replace(/\/api\/chat\/?$/, "")}/api/chat/async`;
 
         const agentPayload = {

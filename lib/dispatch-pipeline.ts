@@ -59,7 +59,7 @@ export interface DispatchResult {
 // Production Replit URL. Always-on (unlike *.replit.dev preview URLs
 // which need the IDE open). Override via PIPELINE_API_URL env var.
 const DEFAULT_PIPELINE_URL =
-    "https://agent-salesforce-link.replit.app/api/run-pipeline";
+    "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/run-pipeline";
 
 export async function dispatchPipeline(input: DispatchPipelineInput): Promise<DispatchResult> {
     const pipelineUrl = process.env.PIPELINE_API_URL || DEFAULT_PIPELINE_URL;

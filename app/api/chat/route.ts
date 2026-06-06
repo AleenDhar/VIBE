@@ -216,7 +216,7 @@ Please use this context to personalize your responses.`;
             .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
 
         const apiKeys: Record<string, string> = {};
-        let agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+        let agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
         // Ensure the URL ends with /api/chat
         if (!agentApiUrl.endsWith("/api/chat") && !agentApiUrl.endsWith("/api/chat/")) {
             agentApiUrl = `${agentApiUrl.replace(/\/$/, "")}/api/chat`;

@@ -130,7 +130,7 @@ export async function runAutomationTask(taskId: string): Promise<RunOutcome> {
     const basePrompt = basePromptRes.data?.value || "You are a helpful AI assistant.";
 
     const apiKeys: Record<string, string> = {};
-    let agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+    let agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
     if (!agentApiUrl.endsWith("/api/chat") && !agentApiUrl.endsWith("/api/chat/")) {
         agentApiUrl = `${agentApiUrl.replace(/\/$/, "")}/api/chat`;
     }
@@ -300,7 +300,7 @@ export async function runAutomationTaskPhase(
     const allowedModels: string[] = profile?.allowed_models || [];
     const basePrompt = basePromptRes.data?.value || "You are a helpful AI assistant.";
     const apiKeys: Record<string, string> = {};
-    let agentApiUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+    let agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
     if (!agentApiUrl.endsWith("/api/chat") && !agentApiUrl.endsWith("/api/chat/")) {
         agentApiUrl = `${agentApiUrl.replace(/\/$/, "")}/api/chat`;
     }

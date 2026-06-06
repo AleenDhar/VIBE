@@ -16,7 +16,7 @@ export async function computeTodaySpend(
   supabase: any
 ): Promise<number> {
   const agentApiUrl =
-    process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app";
+    process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
   const todayStart = getISTDayStart();
   const todayStartMs = todayStart.getTime();
 

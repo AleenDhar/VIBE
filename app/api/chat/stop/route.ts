@@ -11,13 +11,13 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Missing chatId" }, { status: 400 });
         }
 
-        const agentApiBaseUrl = process.env.AGENT_API_URL || "https://agent-salesforce-link.replit.app/api/chat/";
+        const agentApiBaseUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/";
         // Ensure base URL doesn't have trailing slash for cleaner concatenation or handle it property
         const baseUrl = agentApiBaseUrl.endsWith('/') ? agentApiBaseUrl.slice(0, -1) : agentApiBaseUrl;
 
         // Construct stop URL: /api/chat/stop?chat_id=...
         // If agentApiBaseUrl is .../api/chat/, then we want .../api/chat/stop
-        // The user provided example: https://agent-salesforce-link.replit.app/api/chat/stop?chat_id=...
+        // The user provided example: http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/stop?chat_id=...
 
         const stopUrl = `${baseUrl}/stop?chat_id=${chatId}`;
         console.log(`[API] Stopping chat: ${stopUrl}`);

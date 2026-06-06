@@ -39,7 +39,7 @@ export function ApiKeyList({ initialKeys }: ApiKeyEditorProps) {
                 <ApiKeyRow
                     label="Replit Agent API URL"
                     dbKey="agent_api_url"
-                    initialValue={initialKeys["agent_api_url"] || "https://agent-salesforce-link.replit.app/api/chat/"}
+                    initialValue={initialKeys["agent_api_url"] || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/"}
                     isUrl={true}
                 />
             </div>

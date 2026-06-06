@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 
   const agentApiUrl =
     process.env.AGENT_API_URL ||
-    "https://agent-salesforce-link.replit.app";
+    "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
 
   try {
     // Fetch global daily credit setting

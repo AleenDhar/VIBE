@@ -242,7 +242,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 7. Route & Payload Construction
-        const baseUrl = config.agent_api_url || "https://agent-salesforce-link.replit.app/api/chat/";
+        const baseUrl = config.agent_api_url || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/";
         // If structured_output_format is present, use the structured endpoint
         const targetUrl = structured_output_format
             ? baseUrl.replace(/\/chat\/?$/, "/chat/structured")
