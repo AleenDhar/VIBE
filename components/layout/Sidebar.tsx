@@ -414,6 +414,27 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                 </Link>
                             );
                         })()}
+                        {/* Admin - Deal Sweep */}
+                        {(userRole === 'admin' || userRole === 'super_admin') && (() => {
+                            const isActive = pathname === '/admin/sweep' || pathname.startsWith('/admin/sweep/');
+                            return (
+                                <Link
+                                    href="/admin/sweep"
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                                        isCollapsed ? "md:justify-center md:px-2 md:w-10" : "",
+                                        isActive
+                                            ? "text-primary font-medium bg-primary/10"
+                                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                    )}
+                                    title={isCollapsed ? "Deal Sweep" : undefined}
+                                    onClick={() => setMobileOpen?.(false)}
+                                >
+                                    <Activity className="h-[18px] w-[18px] flex-shrink-0" />
+                                    <span className={cn(isCollapsed && "md:hidden")}>Deal Sweep</span>
+                                </Link>
+                            );
+                        })()}
                         {/* Super Admin - Executions */}
                         {userRole === 'super_admin' && (() => {
                             const isActive = pathname === '/admin/executions' || pathname.startsWith('/admin/executions/');
