@@ -117,12 +117,21 @@ export async function POST(req: NextRequest) {
 
         if (!existingChat) {
             console.log(`[API] Creating new chat session for ID: ${chatId}`);
-            await supabase.from("chats").insert({
-                id: chatId,
-                user_id: user.id,
-                title: generatedTitle,
-                project_id: finalProjectId || null
-            });
+            // Idempotent create: two near-simultaneous sends for the same chat
+            // both see "no chat" (TOCTOU) and would both INSERT, throwing
+            // duplicate-key on chats_pkey and adding pointless write load on the
+            // DB. ON CONFLICT DO NOTHING (ignoreDuplicates) makes the loser a
+            // no-op instead of an error, and never clobbers the existing row.
+            const { error: chatInsertErr } = await supabase.from("chats").upsert(
+                {
+                    id: chatId,
+                    user_id: user.id,
+                    title: generatedTitle,
+                    project_id: finalProjectId || null
+                },
+                { onConflict: "id", ignoreDuplicates: true }
+            );
+            if (chatInsertErr) console.warn(`[API] chat upsert (non-fatal): ${chatInsertErr.message}`);
         } else if (existingChat.title === "New Chat" || !existingChat.title) {
             console.log(`[API] Auto-naming chat "${chatId}" based on first message`);
             await supabase.from("chats")

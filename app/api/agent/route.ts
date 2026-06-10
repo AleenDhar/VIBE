@@ -138,12 +138,19 @@ export async function POST(req: NextRequest) {
         const generatedTitle = "\u200B" + (content.slice(0, 50) || "New Chat");
 
         if (!existingChat) {
-            await supabase.from("chats").insert({
-                id: chatId,
-                user_id: user.id,
-                title: generatedTitle,
-                project_id: projectId || null
-            });
+            // Idempotent create \u2014 concurrent sends for the same chat id race the
+            // check-then-insert and throw duplicate-key on chats_pkey. ON CONFLICT
+            // DO NOTHING makes the loser a no-op (see app/api/chat/route.ts).
+            const { error: chatInsertErr } = await supabase.from("chats").upsert(
+                {
+                    id: chatId,
+                    user_id: user.id,
+                    title: generatedTitle,
+                    project_id: projectId || null
+                },
+                { onConflict: "id", ignoreDuplicates: true }
+            );
+            if (chatInsertErr) console.warn(`[agent] chat upsert (non-fatal): ${chatInsertErr.message}`);
         } else if (!existingChat.title || existingChat.title === "New Chat" || existingChat.title === "\u200BNew Chat") {
             await supabase.from("chats")
                 .update({ title: generatedTitle })
