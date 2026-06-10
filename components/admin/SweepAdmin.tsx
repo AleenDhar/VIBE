@@ -17,6 +17,7 @@ import {
     type OppRun,
     type OppAnalysis,
     type Delta,
+    type ActiveRun,
 } from "@/lib/actions/sweep";
 
 const SF_BASE = "https://zycus.lightning.force.com/lightning/r/Opportunity";
@@ -50,6 +51,14 @@ function RunningPill() {
     );
 }
 function statusPill(status: string | null) {
+    if (status === "running") {
+        return (
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs border bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30">
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                running
+            </span>
+        );
+    }
     const ok = status === "completed";
     const cls = ok
         ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
@@ -93,7 +102,13 @@ export function SweepAdmin({
     // auto-refresh when a run finishes. Works for runs started here AND ones
     // triggered from Salesforce, and survives a page reload.
     const [inflight, setInflight] = useState<Set<string>>(new Set());
+    // Full running rows (for the Reruns tab), from the same poll.
+    const [activeRows, setActiveRows] = useState<ActiveRun[]>([]);
     const prevInflightRef = useRef<Set<string>>(new Set());
+    // Keys just triggered locally (optimistic). They're kept out of the
+    // "finished" detection for a short grace window so a poll that fires before
+    // the backend has registered the run doesn't falsely flash "finished".
+    const recentlyTriggeredRef = useRef<Record<string, number>>({});
     // Refs so the single poll loop reads the latest search / open drawer
     // without re-subscribing (which would reset the interval on every keystroke).
     const searchRef = useRef(search);
@@ -125,11 +140,22 @@ export function SweepAdmin({
         let active = true;
         let timer: ReturnType<typeof setTimeout>;
         const tick = async () => {
-            const ids = await getActiveRuns();
+            const rows = await getActiveRuns();
             if (!active) return;
-            const next = new Set(ids);
+            setActiveRows(rows);
+            const next = new Set(rows.map((r) => r.opp_id_15));
+            // Once the backend confirms a key is running, drop its optimistic
+            // grace marker so a later genuine finish IS detected.
+            for (const k of next) delete recentlyTriggeredRef.current[k];
             const prev = prevInflightRef.current;
-            const finished = [...prev].filter((k) => !next.has(k));
+            const GRACE_MS = 12000;
+            const nowMs = Date.now();
+            const finished = [...prev].filter(
+                (k) =>
+                    !next.has(k) &&
+                    !(recentlyTriggeredRef.current[k] &&
+                      nowMs - recentlyTriggeredRef.current[k] < GRACE_MS)
+            );
             prevInflightRef.current = next;
             setInflight(next);
             if (finished.length > 0) {
@@ -206,11 +232,12 @@ export function SweepAdmin({
         startTransition(async () => {
             const r = await runOppNow(oppId);
             if (r.success) {
-                // Optimistically show Running… immediately (the backend marks it
-                // in-flight before returning, so the next poll will confirm it;
-                // seeding prevInflightRef too prevents a false "finished" flash).
+                // Optimistically show Running… immediately. The backend marks it
+                // in-flight in the shared table within ~1s; the grace marker keeps
+                // the next poll from falsely flashing "finished" before then.
                 setInflight((s) => new Set(s).add(key));
                 prevInflightRef.current = new Set(prevInflightRef.current).add(key);
+                recentlyTriggeredRef.current[key] = Date.now();
                 flash("ok", `Re-analysis started for ${oppId} — running…`);
             } else {
                 flash("err", r.error || "Trigger failed");
@@ -218,9 +245,27 @@ export function SweepAdmin({
         });
     }
 
+    // In-flight re-analyses, shaped like finished runs so they render in the
+    // Reruns tab — on top, with a "running" status pill.
+    const activeAsReruns: RerunRow[] = activeRows.map((a) => ({
+        opp_id: a.opp_id || a.opp_id_15,
+        opp_name: a.opp_name,
+        account_name: a.account_name,
+        owner_name: a.owner_name,
+        source: a.source,
+        status: "running",
+        duration_ms: null,
+        model: null,
+        total_tokens: null,
+        cost_usd: null,
+        error: null,
+        created_at: a.started_at || new Date().toISOString(),
+    }));
+    const rerunRows: RerunRow[] = [...activeAsReruns, ...reruns];
+
     const tabs: { id: Tab; label: string; count?: number }[] = [
         { id: "tracked", label: "Tracked opps", count: opps.length },
-        { id: "reruns", label: "Reruns", count: reruns.length },
+        { id: "reruns", label: "Reruns", count: rerunRows.length },
         { id: "errors", label: "Errors", count: errors.length },
         { id: "prompt", label: "Sweep prompt" },
     ];
@@ -374,7 +419,7 @@ export function SweepAdmin({
 
             {/* RERUNS */}
             {tab === "reruns" && (
-                <RunTable rows={reruns} onRefresh={refreshReruns} showError={false} />
+                <RunTable rows={rerunRows} onRefresh={refreshReruns} showError={false} />
             )}
 
             {/* ERRORS */}

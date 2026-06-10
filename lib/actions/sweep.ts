@@ -136,12 +136,25 @@ export async function runOppNow(
     }
 }
 
-// The 15-char opp keys whose single-opp re-analysis is in flight right now
-// (manual "Run now", a Salesforce update trigger, or discovery). The sweep
-// admin polls this every few seconds to render a live "Running…" pill. Cheap
-// in-memory read on the backend; returns [] on any failure so the UI degrades
-// to its last-known state rather than throwing.
-export async function getActiveRuns(): Promise<string[]> {
+// One opp whose single-opp re-analysis is in flight right now (manual "Run
+// now", a Salesforce update trigger, or discovery). Shaped to render in the
+// Reruns tab alongside finished runs.
+export type ActiveRun = {
+    opp_id_15: string;
+    opp_id: string | null;
+    opp_name: string | null;
+    account_name: string | null;
+    owner_name: string | null;
+    source: string | null;
+    started_at: string | null;
+};
+
+// The re-analyses in flight right now, read from the backend's SHARED registry
+// (so it's consistent across API instances and survives a reload — no flicker).
+// The sweep admin polls this every few seconds to render live "Running…" pills
+// AND the running rows in the Reruns tab. Returns [] on any failure so the UI
+// degrades to its last-known state rather than throwing.
+export async function getActiveRuns(): Promise<ActiveRun[]> {
     if (!(await verifyAdmin())) return [];
     const base = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
     const token = process.env.DISPATCH_SECRET || "";
@@ -154,8 +167,24 @@ export async function getActiveRuns(): Promise<string[]> {
         });
         if (!r.ok) return [];
         const j = await r.json().catch(() => ({}));
-        const ids = Array.isArray(j?.inflight) ? j.inflight : [];
-        return ids.map((s: any) => String(s).slice(0, 15)).filter(Boolean);
+        // New backend returns `runs` (full rows); fall back to `inflight` (ids)
+        // so the feature still works during the deploy window.
+        const raw: any[] = Array.isArray(j?.runs)
+            ? j.runs
+            : Array.isArray(j?.inflight)
+                ? j.inflight.map((id: any) => ({ opp_id_15: id, opp_id: id }))
+                : [];
+        return raw
+            .map((x: any): ActiveRun => ({
+                opp_id_15: String(x.opp_id_15 || "").slice(0, 15),
+                opp_id: x.opp_id ?? null,
+                opp_name: x.opp_name ?? null,
+                account_name: x.account_name ?? null,
+                owner_name: x.owner_name ?? null,
+                source: x.source ?? null,
+                started_at: x.started_at ?? null,
+            }))
+            .filter((x: ActiveRun) => !!x.opp_id_15);
     } catch {
         return [];
     }
