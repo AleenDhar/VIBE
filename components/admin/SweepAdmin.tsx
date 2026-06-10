@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect, useRef } from "react";
+import { useState, useTransition, useEffect, useRef, Fragment } from "react";
 import {
     addTrackedOpp,
     removeTrackedOpp,
@@ -734,9 +734,13 @@ function RunTable({
     onRefresh: () => void;
     showError: boolean;
 }) {
+    // Click a row to expand its full error + run values inline.
+    const [openKey, setOpenKey] = useState<string | null>(null);
+    const cols = showError ? 8 : 7;
     return (
         <div className="flex flex-col gap-2">
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">Click a row to see its error &amp; run details.</span>
                 <button onClick={onRefresh} className="px-3 py-1.5 rounded-md text-sm border">
                     Refresh
                 </button>
@@ -758,38 +762,99 @@ function RunTable({
                     <tbody>
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={showError ? 8 : 7} className="px-3 py-6 text-center text-muted-foreground">
+                                <td colSpan={cols} className="px-3 py-6 text-center text-muted-foreground">
                                     {showError ? "No errors 🎉" : "No runs yet."}
                                 </td>
                             </tr>
                         )}
-                        {rows.map((r, i) => (
-                            <tr key={i} className="border-t hover:bg-muted/30 align-top">
-                                <td className="px-3 py-2 whitespace-nowrap">{fmtDate(r.created_at)}</td>
-                                <td className="px-3 py-2">
-                                    <a
-                                        href={`${SF_BASE}/${r.opp_id}/view`}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-primary hover:underline"
+                        {rows.map((r, i) => {
+                            const key = `${r.opp_id}-${r.created_at}-${i}`;
+                            const open = openKey === key;
+                            return (
+                                <Fragment key={key}>
+                                    <tr
+                                        onClick={() => setOpenKey(open ? null : key)}
+                                        className={`border-t align-top cursor-pointer ${open ? "bg-muted/40" : "hover:bg-muted/30"}`}
+                                        title="Click for error & run details"
                                     >
-                                        {r.opp_name || r.opp_id}
-                                    </a>
-                                </td>
-                                <td className="px-3 py-2">{r.source || "—"}</td>
-                                <td className="px-3 py-2">{statusPill(r.status)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">{fmtDur(r.duration_ms)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">{r.model || "—"}</td>
-                                <td className="px-3 py-2 whitespace-nowrap">{fmtMoney(r.cost_usd)}</td>
-                                {showError && (
-                                    <td className="px-3 py-2 text-xs text-red-600 dark:text-red-400 max-w-md">
-                                        {r.error || "—"}
-                                    </td>
-                                )}
-                            </tr>
-                        ))}
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            <span className="text-muted-foreground mr-1.5">{open ? "▾" : "▸"}</span>
+                                            {fmtDate(r.created_at)}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                            <a
+                                                href={`${SF_BASE}/${r.opp_id}/view`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="text-primary hover:underline"
+                                            >
+                                                {r.opp_name || r.opp_id}
+                                            </a>
+                                        </td>
+                                        <td className="px-3 py-2">{r.source || "—"}</td>
+                                        <td className="px-3 py-2">{statusPill(r.status)}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">{fmtDur(r.duration_ms)}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">{r.model || "—"}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">{fmtMoney(r.cost_usd)}</td>
+                                        {showError && (
+                                            <td className="px-3 py-2 text-xs text-red-600 dark:text-red-400 max-w-xs truncate">
+                                                {r.error || "—"}
+                                            </td>
+                                        )}
+                                    </tr>
+                                    {open && (
+                                        <tr className="border-t bg-muted/20">
+                                            <td colSpan={cols} className="px-4 py-3">
+                                                <RunDetail r={r} />
+                                            </td>
+                                        </tr>
+                                    )}
+                                </Fragment>
+                            );
+                        })}
                     </tbody>
                 </table>
+            </div>
+        </div>
+    );
+}
+
+function RunDetail({ r }: { r: RerunRow }) {
+    const field = (k: string, v: string | null) => (
+        <div>
+            <span className="text-muted-foreground">{k}: </span>
+            <span className="font-medium break-words">{v || "—"}</span>
+        </div>
+    );
+    return (
+        <div className="flex flex-col gap-3">
+            {r.status === "running" ? (
+                <div className="text-sm text-blue-600 dark:text-blue-400">
+                    Re-analysis in progress (started {fmtDate(r.created_at)}). No result yet — it’ll update here when it finishes.
+                </div>
+            ) : r.error ? (
+                <div>
+                    <div className="text-xs font-semibold text-red-600 dark:text-red-400 mb-1">Error</div>
+                    <pre className="text-xs whitespace-pre-wrap break-words bg-red-500/10 border border-red-500/30 rounded-md p-2 text-red-700 dark:text-red-300">
+                        {r.error}
+                    </pre>
+                </div>
+            ) : (
+                <div className="text-sm text-emerald-600 dark:text-emerald-400">Completed cleanly — no error.</div>
+            )}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-1 text-xs">
+                {field("Status", r.status)}
+                {field("Source", r.source)}
+                {field("Duration", fmtDur(r.duration_ms))}
+                {field("Model", r.model)}
+                {field("Total tokens", r.total_tokens != null ? Number(r.total_tokens).toLocaleString() : null)}
+                {field("Cost", r.cost_usd != null ? fmtMoney(r.cost_usd) : null)}
+                {field("Opportunity", r.opp_name)}
+                {field("Account", r.account_name)}
+                {field("Owner", r.owner_name)}
+                {field("Opp ID", r.opp_id)}
+                {field("When", fmtDate(r.created_at))}
             </div>
         </div>
     );
