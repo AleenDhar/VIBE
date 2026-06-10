@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import {
     addTrackedOpp,
     removeTrackedOpp,
@@ -10,6 +10,7 @@ import {
     getErrors,
     getOppRuns,
     getOppAnalysis,
+    getActiveRuns,
     updateSweepPrompt,
     type TrackedOpp,
     type RerunRow,
@@ -39,6 +40,14 @@ function fmtMoney(n: number | null) {
 function fmtDur(ms: number | null) {
     if (ms == null) return "—";
     return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+function RunningPill() {
+    return (
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs border bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30">
+            <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+            Running…
+        </span>
+    );
 }
 function statusPill(status: string | null) {
     const ok = status === "completed";
@@ -79,6 +88,19 @@ export function SweepAdmin({
     const [drawerAnalysis, setDrawerAnalysis] = useState<OppAnalysis>(null);
     const [drawerBusy, setDrawerBusy] = useState(false);
 
+    // Live "running" state: the 15-char opp keys with an in-flight re-analysis
+    // (polled from the backend every 5s). Drives the Running… pills and the
+    // auto-refresh when a run finishes. Works for runs started here AND ones
+    // triggered from Salesforce, and survives a page reload.
+    const [inflight, setInflight] = useState<Set<string>>(new Set());
+    const prevInflightRef = useRef<Set<string>>(new Set());
+    // Refs so the single poll loop reads the latest search / open drawer
+    // without re-subscribing (which would reset the interval on every keystroke).
+    const searchRef = useRef(search);
+    searchRef.current = search;
+    const drawerOppRef = useRef(drawerOpp);
+    drawerOppRef.current = drawerOpp;
+
     function openDrawer(o: TrackedOpp) {
         setDrawerOpp(o);
         setDrawerRuns([]);
@@ -94,6 +116,50 @@ export function SweepAdmin({
             setDrawerBusy(false);
         })();
     }
+
+    // Poll the backend for in-flight re-analyses. When an opp transitions from
+    // running → done, refresh the tracked row (new swept_at) and, if its drawer
+    // is open, reload that opp's run history + analysis so the result shows up
+    // without a manual refresh.
+    useEffect(() => {
+        let active = true;
+        let timer: ReturnType<typeof setTimeout>;
+        const tick = async () => {
+            const ids = await getActiveRuns();
+            if (!active) return;
+            const next = new Set(ids);
+            const prev = prevInflightRef.current;
+            const finished = [...prev].filter((k) => !next.has(k));
+            prevInflightRef.current = next;
+            setInflight(next);
+            if (finished.length > 0) {
+                try {
+                    setOpps(await getTrackedOpps(searchRef.current));
+                } catch {}
+                const dOpp = drawerOppRef.current;
+                if (dOpp && finished.includes(dOpp.opp_id.slice(0, 15))) {
+                    try {
+                        const [runs, analysis] = await Promise.all([
+                            getOppRuns(dOpp.opp_id),
+                            getOppAnalysis(dOpp.opp_id),
+                        ]);
+                        if (active) {
+                            setDrawerRuns(runs);
+                            setDrawerAnalysis(analysis);
+                        }
+                    } catch {}
+                }
+                if (active) flash("ok", `Re-analysis finished for ${finished.length} opp(s).`);
+            }
+            if (active) timer = setTimeout(tick, 5000);
+        };
+        tick();
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     function flash(kind: "ok" | "err", text: string) {
         setMsg({ kind, text });
@@ -136,10 +202,19 @@ export function SweepAdmin({
         });
     }
     function onRun(oppId: string) {
+        const key = oppId.slice(0, 15);
         startTransition(async () => {
             const r = await runOppNow(oppId);
-            if (r.success) flash("ok", `Re-analysis triggered for ${oppId} (runs in background).`);
-            else flash("err", r.error || "Trigger failed");
+            if (r.success) {
+                // Optimistically show Running… immediately (the backend marks it
+                // in-flight before returning, so the next poll will confirm it;
+                // seeding prevInflightRef too prevents a false "finished" flash).
+                setInflight((s) => new Set(s).add(key));
+                prevInflightRef.current = new Set(prevInflightRef.current).add(key);
+                flash("ok", `Re-analysis started for ${oppId} — running…`);
+            } else {
+                flash("err", r.error || "Trigger failed");
+            }
         });
     }
 
@@ -171,6 +246,12 @@ export function SweepAdmin({
                     </button>
                 ))}
                 {pending && <span className="self-center text-xs text-muted-foreground">working…</span>}
+                {inflight.size > 0 && (
+                    <span className="self-center inline-flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                        <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                        {inflight.size} re-analysis{inflight.size === 1 ? "" : "es"} running
+                    </span>
+                )}
             </div>
 
             {msg && (
@@ -238,11 +319,13 @@ export function SweepAdmin({
                                         </td>
                                     </tr>
                                 )}
-                                {opps.map((o) => (
+                                {opps.map((o) => {
+                                    const isRunning = inflight.has(o.opp_id.slice(0, 15));
+                                    return (
                                     <tr
                                         key={o.opp_id}
                                         onClick={() => openDrawer(o)}
-                                        className="border-t hover:bg-muted/30 cursor-pointer"
+                                        className={`border-t cursor-pointer ${isRunning ? "bg-blue-500/5 hover:bg-blue-500/10" : "hover:bg-muted/30"}`}
                                         title="View run history & analysis"
                                     >
                                         <td className="px-3 py-2">
@@ -261,14 +344,16 @@ export function SweepAdmin({
                                         <td className="px-3 py-2">{o.owner_name || "—"}</td>
                                         <td className="px-3 py-2">{o.stage || "—"}</td>
                                         <td className="px-3 py-2">{fmtMoney(o.amount)}</td>
-                                        <td className="px-3 py-2 whitespace-nowrap">{o.swept_at || "—"}</td>
+                                        <td className="px-3 py-2 whitespace-nowrap">
+                                            {isRunning ? <RunningPill /> : (o.swept_at || "—")}
+                                        </td>
                                         <td className="px-3 py-2 text-right whitespace-nowrap">
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); onRun(o.opp_id); }}
-                                                disabled={pending}
+                                                disabled={pending || isRunning}
                                                 className="px-2 py-1 text-xs rounded border mr-1 hover:bg-muted disabled:opacity-50"
                                             >
-                                                Run now
+                                                {isRunning ? "Running…" : "Run now"}
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); onRemove(o.opp_id, o.opp_name); }}
@@ -279,7 +364,8 @@ export function SweepAdmin({
                                             </button>
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -347,6 +433,7 @@ export function SweepAdmin({
                     runs={drawerRuns}
                     analysis={drawerAnalysis}
                     busy={drawerBusy}
+                    running={inflight.has(drawerOpp.opp_id.slice(0, 15))}
                     onClose={() => setDrawerOpp(null)}
                     onRunNow={() => onRun(drawerOpp.opp_id)}
                 />
@@ -365,6 +452,7 @@ function OppDrawer({
     runs,
     analysis,
     busy,
+    running,
     onClose,
     onRunNow,
 }: {
@@ -372,6 +460,7 @@ function OppDrawer({
     runs: OppRun[];
     analysis: OppAnalysis;
     busy: boolean;
+    running: boolean;
     onClose: () => void;
     onRunNow: () => void;
 }) {
@@ -399,12 +488,14 @@ function OppDrawer({
                         <div className="text-[11px] text-muted-foreground mt-0.5">{opp.opp_id}</div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                        {running && <RunningPill />}
                         <button
                             onClick={onRunNow}
-                            className="px-2 py-1 text-xs rounded border hover:bg-muted"
+                            disabled={running}
+                            className="px-2 py-1 text-xs rounded border hover:bg-muted disabled:opacity-50"
                             title="Trigger a fresh re-analysis"
                         >
-                            Run now
+                            {running ? "Running…" : "Run now"}
                         </button>
                         <button
                             onClick={onClose}
@@ -415,6 +506,12 @@ function OppDrawer({
                         </button>
                     </div>
                 </div>
+                {running && (
+                    <div className="px-4 py-2 text-xs bg-blue-500/10 border-b border-blue-500/20 text-blue-700 dark:text-blue-400">
+                        Re-analysis in progress — the run history and analysis below
+                        will refresh automatically when it finishes.
+                    </div>
+                )}
 
                 <div className="flex-1 overflow-y-auto">
                     {busy ? (

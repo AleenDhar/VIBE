@@ -136,6 +136,31 @@ export async function runOppNow(
     }
 }
 
+// The 15-char opp keys whose single-opp re-analysis is in flight right now
+// (manual "Run now", a Salesforce update trigger, or discovery). The sweep
+// admin polls this every few seconds to render a live "Running…" pill. Cheap
+// in-memory read on the backend; returns [] on any failure so the UI degrades
+// to its last-known state rather than throwing.
+export async function getActiveRuns(): Promise<string[]> {
+    if (!(await verifyAdmin())) return [];
+    const base = (process.env.AGENT_API_URL || "").replace(/\/$/, "");
+    const token = process.env.DISPATCH_SECRET || "";
+    if (!base) return [];
+    try {
+        const r = await fetch(`${base}/api/deal-engine/sweep/active`, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${token}` },
+            cache: "no-store",
+        });
+        if (!r.ok) return [];
+        const j = await r.json().catch(() => ({}));
+        const ids = Array.isArray(j?.inflight) ? j.inflight : [];
+        return ids.map((s: any) => String(s).slice(0, 15)).filter(Boolean);
+    } catch {
+        return [];
+    }
+}
+
 export async function getReruns(limit = 100): Promise<RerunRow[]> {
     if (!(await verifyAdmin())) return [];
     const supabase = await createClient();
