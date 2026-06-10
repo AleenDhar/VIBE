@@ -467,10 +467,22 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 return false;
             });
 
-        // If the turn hasn't resolved, the agent is still thinking
+        // If the turn hasn't resolved, the agent MIGHT still be thinking — but
+        // only re-arm the spinner when the run is plausibly still alive. A live
+        // run emits status/tool rows continuously, so the LATEST row is always
+        // fresh; if the newest row is stale, the run already ended (often without
+        // a terminal row, e.g. a dispatch failure or an orchestrator that died),
+        // and re-arming would leave the chat stuck showing "running" with a Stop
+        // button and no agent reply ever arriving. Cap re-arm to recent turns;
+        // the 3-min silence watchdog still backstops anything that slips through.
         if (!hasFinalResponse) {
-            setLoading(true);
-            setThinkingText("Thinking...");
+            const lastMsg = initialMessages[initialMessages.length - 1];
+            const lastAtMs = new Date(lastMsg?.created_at || 0).getTime();
+            const REARM_MAX_AGE_MS = 4 * 60 * 1000; // > the 3-min stall watchdog
+            if (Date.now() - lastAtMs < REARM_MAX_AGE_MS) {
+                setLoading(true);
+                setThinkingText("Thinking...");
+            }
         }
     }, []); // Only run on mount
 
@@ -919,6 +931,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             console.warn(`[Watchdog] FIRED — no activity for 180s while loading. realtimeStatus=${realtimeStatus}, isStreaming=${isStreamingRef.current}`);
             setLoading(false);
             setThinkingText('');
+            setStopping(false);
             setMessages(prev => prev.map(m =>
                 m.role === 'assistant' && m.isProcessing ? { ...m, isProcessing: false } : m
             ));
@@ -990,11 +1003,24 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     chatId,
                     content: finalMessageContent,
                     images: imagesToSend.length > 0 ? imagesToSend : undefined,
-                    previousMessages: messages.map(m => ({
-                        role: m.role,
-                        content: m.content,
-                        images: m.images
-                    })),
+                    // Send only the REAL conversation as history. Internal
+                    // status / error / cancelled rows ("Run failed…", "Run ended
+                    // without a terminal status") are NOT conversation — passing
+                    // them makes the agent think the run is a pile of error states
+                    // and reply "I have no prior context to continue from". Drop
+                    // them (and empty rows) so the agent always sees the actual
+                    // user requests + assistant outputs and can continue.
+                    previousMessages: messages
+                        .filter(m => {
+                            if (m.role === "assistant" &&
+                                (m.type === "error" || m.type === "status" || m.type === "cancelled")) return false;
+                            return !!(m.content && String(m.content).trim());
+                        })
+                        .map(m => ({
+                            role: m.role,
+                            content: m.content,
+                            images: m.images
+                        })),
                     model: overrideModel || model
                 })
             });

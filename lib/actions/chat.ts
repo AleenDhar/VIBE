@@ -141,7 +141,8 @@ export async function sendMessage(projectId: string | null, chatId: string, cont
     };
 
     try {
-        const response = await fetch("http://13.201.66.23:8000/api/chat/structured", {
+        const agentBase = (process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com").replace(/\/$/, "");
+        const response = await fetch(`${agentBase}/api/chat/structured`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
