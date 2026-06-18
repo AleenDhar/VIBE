@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { chunkText, generateEmbeddings } from "@/lib/rag-utils";
+import { chunkText, generateEmbeddings, insertChunksInBatches } from "@/lib/rag-utils";
 
 export async function GET(req: Request) {
     const supabase = await createClient();
@@ -55,11 +55,7 @@ export async function GET(req: Request) {
                     embedding: embeddings[i]
                 }));
 
-                const { error: insertError } = await supabase
-                    .from("document_chunks")
-                    .insert(chunkRows);
-
-                if (insertError) throw insertError;
+                await insertChunksInBatches(supabase, chunkRows, 100);
 
                 results.push({ id: doc.id, status: `success (added ${chunks.length} chunks)` });
 

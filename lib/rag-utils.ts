@@ -1,6 +1,13 @@
 import OpenAI from "openai";
 import { createClient } from "@/lib/supabase/server";
 
+// Single source of truth for the embedding model. The BACKEND query path
+// (mase-dev/custom_tools/search_knowledge.py) MUST embed search queries with this
+// SAME model — otherwise stored document vectors and query vectors live in
+// different spaces and cosine similarity is meaningless. Both sides default to
+// text-embedding-3-small and read the EMBEDDING_MODEL env var; keep them in sync.
+export const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+
 export function chunkText(text: string, maxChunkSize = 1000): string[] {
     const chunks: string[] = [];
     const paragraphs = text.split(/\n\s*\n/);
@@ -68,7 +75,7 @@ export async function generateEmbeddings(chunks: string[], apiKey?: string): Pro
     for (let i = 0; i < chunks.length; i += CHUNK_BATCH_SIZE) {
         const batch = chunks.slice(i, i + CHUNK_BATCH_SIZE);
         const response = await openai.embeddings.create({
-            model: "text-embedding-3-small",
+            model: EMBEDDING_MODEL,
             input: batch,
         });
         const embeddings = response.data.map(d => d.embedding);
@@ -76,4 +83,64 @@ export async function generateEmbeddings(chunks: string[], apiKey?: string): Pro
     }
 
     return allEmbeddings;
+}
+
+/**
+ * Insert chunk rows in small batches. A single large insert of many ~1536-dim
+ * vector rows can exceed the Postgres statement timeout — the root cause of large
+ * RAG files silently landing at 0 chunks. Batching keeps each statement small.
+ * Throws on the first failing batch so callers can surface the error instead of
+ * swallowing it.
+ */
+export async function insertChunksInBatches(
+    supabase: any,
+    rows: any[],
+    batchSize = 100,
+): Promise<void> {
+    for (let i = 0; i < rows.length; i += batchSize) {
+        const batch = rows.slice(i, i + batchSize);
+        const { error } = await supabase.from("document_chunks").insert(batch);
+        if (error) {
+            throw new Error(
+                `chunk insert failed at batch ${Math.floor(i / batchSize) + 1} ` +
+                `(rows ${i}-${i + batch.length} of ${rows.length}): ${error.message}`,
+            );
+        }
+    }
+}
+
+/**
+ * Chunk + embed `content` and (re)store the vectors for a document. Idempotent:
+ * deletes any existing chunks for the document first. Returns the number of
+ * chunks stored (0 if the content produced no chunks). On any embed/insert
+ * failure it cleans up partial chunks and rethrows — it never leaves a
+ * half-indexed or silently-empty document behind.
+ */
+export async function embedAndStoreDocumentChunks(
+    supabase: any,
+    documentId: string,
+    projectId: string,
+    content: string,
+): Promise<number> {
+    const chunks = chunkText(content);
+    if (chunks.length === 0) return 0;
+
+    const embeddings = await generateEmbeddings(chunks);
+    const rows = chunks.map((chunk, i) => ({
+        document_id: documentId,
+        project_id: projectId,
+        content: chunk,
+        embedding: embeddings[i],
+    }));
+
+    // Replace existing chunks so re-indexing is idempotent.
+    await supabase.from("document_chunks").delete().eq("document_id", documentId);
+    try {
+        await insertChunksInBatches(supabase, rows, 100);
+    } catch (e) {
+        // Don't leave a partially-indexed document behind.
+        await supabase.from("document_chunks").delete().eq("document_id", documentId);
+        throw e;
+    }
+    return chunks.length;
 }

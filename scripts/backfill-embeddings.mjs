@@ -79,7 +79,7 @@ async function embedChunks(chunks) {
     for (let i = 0; i < chunks.length; i += BATCH) {
         const batch = chunks.slice(i, i + BATCH);
         const res = await openai.embeddings.create({
-            model: "text-embedding-3-small",
+            model: process.env.EMBEDDING_MODEL || "text-embedding-3-small",
             input: batch
         });
         all.push(...res.data.map(d => d.embedding));
@@ -141,10 +141,15 @@ async function main() {
                 content: chunk,
                 embedding: embeddings[i]
             }));
-            const { error: insertErr } = await supabase
-                .from("document_chunks")
-                .insert(rows);
-            if (insertErr) throw insertErr;
+            // Insert in small batches — one large vector insert can hit the
+            // Postgres statement timeout (the original silent-0-chunks bug, and
+            // why large CSVs failed this backfill).
+            for (let i = 0; i < rows.length; i += 100) {
+                const { error: insertErr } = await supabase
+                    .from("document_chunks")
+                    .insert(rows.slice(i, i + 100));
+                if (insertErr) throw insertErr;
+            }
             console.log(`  [OK]   ${label} — ${chunks.length} chunks indexed`);
             processed++;
         } catch (e) {
