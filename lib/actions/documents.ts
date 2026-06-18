@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { chunkText, generateEmbeddings } from "@/lib/rag-utils";
+import { embedAndStoreDocumentChunks } from "@/lib/rag-utils";
 
 
 /**
@@ -122,27 +122,28 @@ export async function addDocument(projectId: string, name: string, filePath: str
         return { error: error.message };
     }
 
+    let indexedChunks = 0;
     if (finalContent) {
         try {
-            const chunks = chunkText(finalContent);
-            if (chunks.length > 0) {
-                const embeddings = await generateEmbeddings(chunks);
-                const chunkRows = chunks.map((chunk, i) => ({
-                    document_id: insertedDoc.id,
-                    project_id: projectId,
-                    content: chunk,
-                    embedding: embeddings[i]
-                }));
-                const { error: insertError } = await supabase.from("document_chunks").insert(chunkRows);
-                if (insertError) console.error("Error inserting document chunks:", insertError);
-            }
-        } catch (e) {
-            console.error("Failed to generate document embeddings:", e);
+            indexedChunks = await embedAndStoreDocumentChunks(
+                supabase, insertedDoc.id, projectId, finalContent,
+            );
+        } catch (e: any) {
+            // Previously swallowed — this left a document with content but 0 chunks
+            // that silently failed every RAG search. Surface it so the upload reports
+            // failure and the user can re-index.
+            console.error("Indexing failed for", name, e);
+            return {
+                success: false,
+                error: `File uploaded but indexing failed: ${e.message}. ` +
+                    `Open the project Files panel and use Re-index to retry.`,
+                documentId: insertedDoc.id,
+            };
         }
     }
 
     revalidatePath(`/projects/${projectId}`);
-    return { success: true };
+    return { success: true, indexed: indexedChunks };
 }
 
 export async function updateDocumentContent(documentId: string, content: string) {
@@ -175,23 +176,14 @@ export async function updateDocumentContent(documentId: string, content: string)
 
     if (content) {
         try {
-            // First clear existing chunks
-            await supabase.from("document_chunks").delete().eq("document_id", documentId);
-
-            const chunks = chunkText(content);
-            if (chunks.length > 0) {
-                const embeddings = await generateEmbeddings(chunks);
-                const chunkRows = chunks.map((chunk, i) => ({
-                    document_id: documentId,
-                    project_id: doc.project_id,
-                    content: chunk,
-                    embedding: embeddings[i]
-                }));
-                const { error: insertError } = await supabase.from("document_chunks").insert(chunkRows);
-                if (insertError) console.error("Error inserting updated chunks:", insertError);
-            }
-        } catch (e) {
+            await embedAndStoreDocumentChunks(supabase, documentId, doc.project_id, content);
+        } catch (e: any) {
+            // Surface indexing failure instead of swallowing it (was leaving 0-chunk docs).
             console.error("Failed to update document embeddings:", e);
+            return {
+                success: false,
+                error: `Content saved but indexing failed: ${e.message}. Use Re-index to retry.`,
+            };
         }
     }
 
@@ -250,25 +242,11 @@ export async function reindexProjectDocuments(projectId: string) {
                 continue;
             }
 
-            const chunks = chunkText(content);
-            if (chunks.length === 0) {
+            const indexed = await embedAndStoreDocumentChunks(supabase, doc.id, projectId, content);
+            if (indexed === 0) {
                 skipped++;
                 continue;
             }
-
-            const embeddings = await generateEmbeddings(chunks);
-            const chunkRows = chunks.map((chunk, i) => ({
-                document_id: doc.id,
-                project_id: projectId,
-                content: chunk,
-                embedding: embeddings[i]
-            }));
-
-            const { error: insertError } = await supabase
-                .from("document_chunks")
-                .insert(chunkRows);
-
-            if (insertError) throw insertError;
             processed++;
         } catch (e: any) {
             console.error(`Re-index failed for ${doc.name}:`, e);
