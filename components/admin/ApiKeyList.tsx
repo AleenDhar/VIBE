@@ -7,9 +7,10 @@ import { updateApiKey } from "@/lib/actions/admin";
 
 interface ApiKeyEditorProps {
     initialKeys: Record<string, string>;
+    isSuperAdmin?: boolean;
 }
 
-export function ApiKeyList({ initialKeys }: ApiKeyEditorProps) {
+export function ApiKeyList({ initialKeys, isSuperAdmin = false }: ApiKeyEditorProps) {
     const [loading, setLoading] = useState<string | null>(null);
 
     return (
@@ -35,6 +36,13 @@ export function ApiKeyList({ initialKeys }: ApiKeyEditorProps) {
                     dbKey="anthropic_api_key"
                     initialValue={initialKeys["anthropic_api_key"] || ""}
                 />
+                {isSuperAdmin && (
+                    <ApiKeyRow
+                        label="Fireworks AI ⚡ (Super Admin)"
+                        dbKey="fireworks_api_key"
+                        initialValue={initialKeys["fireworks_api_key"] || ""}
+                    />
+                )}
                 <hr className="my-2 border-muted" />
                 <ApiKeyRow
                     label="Replit Agent API URL"

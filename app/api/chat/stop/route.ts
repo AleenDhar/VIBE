@@ -11,15 +11,18 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Missing chatId" }, { status: 400 });
         }
 
-        const agentApiBaseUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/";
-        // Ensure base URL doesn't have trailing slash for cleaner concatenation or handle it property
-        const baseUrl = agentApiBaseUrl.endsWith('/') ? agentApiBaseUrl.slice(0, -1) : agentApiBaseUrl;
+        // Normalize to the /api/chat root the SAME way app/api/chat/route.ts does.
+        // BUG FIX: AGENT_API_URL is set to the BARE host (no /api/chat) in
+        // .env.local, so the old `${base}/stop` produced ".../stop" — which the
+        // backend doesn't serve (stop lives at /api/chat/stop). The POST 404'd,
+        // the route returned not-ok, and the UI got stuck on "Stopping…" while
+        // the run kept going. Append /api/chat when missing so we always hit
+        // ".../api/chat/stop".
+        let base = (process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat")
+            .replace(/\/$/, "");
+        if (!base.endsWith("/api/chat")) base = `${base}/api/chat`;
 
-        // Construct stop URL: /api/chat/stop?chat_id=...
-        // If agentApiBaseUrl is .../api/chat/, then we want .../api/chat/stop
-        // The user provided example: http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com/api/chat/stop?chat_id=...
-
-        const stopUrl = `${baseUrl}/stop?chat_id=${chatId}`;
+        const stopUrl = `${base}/stop?chat_id=${encodeURIComponent(chatId)}`;
         console.log(`[API] Stopping chat: ${stopUrl}`);
 
         const authToken = process.env.DISPATCH_SECRET;

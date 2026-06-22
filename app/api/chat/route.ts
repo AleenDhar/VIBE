@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-        const { projectId, chatId: rawChatId, content, previousMessages, model, images } = await req.json();
+        const { projectId, chatId: rawChatId, content, previousMessages, model, images, modelExplicit } = await req.json();
 
         // Helper: Ensure valid UUID
         const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -204,17 +204,37 @@ Please use this context to personalize your responses.`;
                 console.warn(`[API] Requested model ${finalModel} is invalid or inactive.`);
                 return NextResponse.json({ error: `Model ${finalModel} is unavailable or inactive.` }, { status: 400 });
             } else {
-                // Check if the user is allowed to use this specific model
-                const isAvailableToAll = requestedModelData.is_available_to_all;
-                const isExplicitlyAllowed = allowedModels.includes(finalModel);
+                const isSuperAdmin = userRole === 'super_admin';
+                const isFireworks = finalModel.startsWith('fireworks:');
 
-                if (!isAvailableToAll && !isExplicitlyAllowed) {
-                    console.warn(`[API] User ${user.id} denied access to restricted model ${finalModel}.`);
-                    return NextResponse.json({ error: `You do not have permission to use this model.` }, { status: 403 });
+                if (isFireworks) {
+                    // Fireworks is a super-admin-only sandbox. This provider gate
+                    // trumps is_available_to_all AND allowed_models, so neither a
+                    // mis-toggle (model flipped available-to-all) nor an injected
+                    // allow-list entry can ever expose it to a non-super-admin.
+                    if (!isSuperAdmin) {
+                        console.warn(`[API] Non-super-admin ${user.id} denied Fireworks model ${finalModel}.`);
+                        return NextResponse.json({ error: `You do not have permission to use this model.` }, { status: 403 });
+                    }
+                } else {
+                    // Normal models: available-to-all, explicitly allowed, or super admin.
+                    const isAvailableToAll = requestedModelData.is_available_to_all;
+                    const isExplicitlyAllowed = allowedModels.includes(finalModel);
+                    if (!isAvailableToAll && !isExplicitlyAllowed && !isSuperAdmin) {
+                        console.warn(`[API] User ${user.id} denied access to restricted model ${finalModel}.`);
+                        return NextResponse.json({ error: `You do not have permission to use this model.` }, { status: 403 });
+                    }
                 }
             }
         } catch (e) {
             console.error("Error validating model access:", e);
+            // Fail CLOSED for the Fireworks sandbox: a transient lookup error
+            // must not let a non-super-admin's fireworks request slip through.
+            // Other models keep the prior fail-open behaviour so a DB hiccup
+            // doesn't block normal chats.
+            if (finalModel.startsWith('fireworks:') && userRole !== 'super_admin') {
+                return NextResponse.json({ error: `Could not validate model access.` }, { status: 403 });
+            }
         }
 
 
@@ -222,7 +242,7 @@ Please use this context to personalize your responses.`;
         const { data: configData } = await supabase
             .from("app_config")
             .select("key, value")
-            .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
+            .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "fireworks_api_key", "agent_api_url"]);
 
         const apiKeys: Record<string, string> = {};
         let agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
@@ -264,6 +284,22 @@ Please use this context to personalize your responses.`;
             projectPhases = phaseRows || [];
         }
         const phaseMode = projectPhases.length > 0;
+
+        // ── Explicit composer model pick overrides per-phase models ───────────
+        // An ABM/phase run normally uses each phase's CONFIGURED model and
+        // ignores the composer picker. That surprised users ("I picked a model
+        // and it still ran the old one") and pinned this project's phase to an
+        // unavailable model. When the user EXPLICITLY picks a model in the
+        // composer (modelExplicit=true), apply it to every phase for this run —
+        // e.g. a super-admin running an ABM on a Fireworks model. We gate on the
+        // explicit flag (not just presence of `model`) because the picker
+        // defaults to gpt-5-mini and must NOT silently downgrade a production
+        // pipeline when the user never touched it. finalModel is already
+        // access-checked above (incl. the fireworks→super-admin gate).
+        if (phaseMode && modelExplicit && finalModel) {
+            console.log(`[API] Explicit model pick — overriding ${projectPhases.length} phase model(s) with ${finalModel}`);
+            projectPhases = projectPhases.map(p => ({ ...p, model_id: finalModel }));
+        }
 
         // Build the shared system prompt prefix (memories + RAG + behavioral
         // instructions, plus legacy projects.system_prompt when no phases).
@@ -336,7 +372,7 @@ Please use this context to personalize your responses.`;
         // return a tiny SSE "started" response. Replit writes chat_messages
         // directly to Supabase as each phase produces output; the chat UI
         // already uses Supabase Realtime to render new rows live.
-        const validation = await validatePhaseModels(supabase, projectPhases as Phase[], allowedModels);
+        const validation = await validatePhaseModels(supabase, projectPhases as Phase[], allowedModels, userRole === 'super_admin');
         if (validation.ok === false) {
             return NextResponse.json({ error: validation.error }, { status: validation.status });
         }

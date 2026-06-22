@@ -305,10 +305,14 @@ export function ProjectPageClient({
                     getCurrentUserRole()
                 ]);
 
-                // Filter based on access
-                const filtered = models.filter(m =>
-                    m.is_available_to_all || allowed.includes(m.id)
-                );
+                // Filter based on access. Fireworks models are a super-admin-only
+                // sandbox (mirror ChatInterface): everyone else never sees them;
+                // super admins also bypass the per-model allow-list.
+                const isSuper = role === 'super_admin';
+                const filtered = models.filter(m => {
+                    if (m.provider === 'fireworks') return isSuper;
+                    return m.is_available_to_all || allowed.includes(m.id) || isSuper;
+                });
 
                 setAvailableModels(filtered);
                 if (filtered.length > 0) {

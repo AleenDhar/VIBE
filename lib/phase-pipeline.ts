@@ -460,7 +460,8 @@ export async function runPhasePipeline(
 export async function validatePhaseModels(
     supabase: any,
     phases: Phase[],
-    allowedModels: string[]
+    allowedModels: string[],
+    isSuperAdmin: boolean = false
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
     const ids = Array.from(new Set(phases.map(p => p.model_id).filter((m): m is string => !!m)));
     if (ids.length === 0) return { ok: true };
@@ -478,7 +479,13 @@ export async function validatePhaseModels(
         if (!row || !row.is_active) {
             return { ok: false, status: 400, error: `${label}: model "${phase.model_id}" is unavailable or inactive.` };
         }
-        if (!row.is_available_to_all && !allowedModels.includes(phase.model_id)) {
+        if (phase.model_id.startsWith('fireworks:')) {
+            // Fireworks phase models are super-admin-only — provider gate trumps
+            // allow-list / availability (mirrors /api/chat).
+            if (!isSuperAdmin) {
+                return { ok: false, status: 403, error: `${label}: Fireworks models require Super Admin.` };
+            }
+        } else if (!row.is_available_to_all && !allowedModels.includes(phase.model_id) && !isSuperAdmin) {
             return { ok: false, status: 403, error: `${label}: you don't have permission to use model "${phase.model_id}".` };
         }
     }

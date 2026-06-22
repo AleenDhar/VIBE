@@ -75,9 +75,13 @@ export default function ChatHomePage() {
                         getCurrentUserRole()
                     ]);
 
-                    const filtered = models.filter(m =>
-                        m.is_available_to_all || allowed.includes(m.id)
-                    );
+                    // Fireworks models are a super-admin-only sandbox (mirror
+                    // ChatInterface); super admins also bypass the allow-list.
+                    const isSuper = role === 'super_admin';
+                    const filtered = models.filter(m => {
+                        if (m.provider === 'fireworks') return isSuper;
+                        return m.is_available_to_all || allowed.includes(m.id) || isSuper;
+                    });
 
                     setAvailableModels(filtered);
                     if (filtered.length > 0) {

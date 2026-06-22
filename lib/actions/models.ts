@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { verifySuperAdmin } from "@/lib/actions/admin";
 
 export interface AIModel {
     id: string;
@@ -58,8 +59,13 @@ export async function getUserAllowedModels(userId: string): Promise<string[]> {
 }
 
 // Update user's permitted models (Admin Management)
+// NOTE: the live path is lib/actions/admin.ts#updateUserAllowedModels (used by
+// UserList). This copy is currently unused; it carries the same Fireworks guard
+// so it can't become a latent privilege-escalation hole if wired later.
 export async function updateUserAllowedModels(userId: string, allowedModels: string[]) {
-    // Needs security check in the upstream action (admin.ts)
+    if (allowedModels.some(m => m.startsWith('fireworks:')) && !(await verifySuperAdmin())) {
+        return { success: false, error: "Only Super Admins can grant access to Fireworks models." };
+    }
     const supabase = await createClient();
 
     // We update via rpc or just direct if RLS allows admin access

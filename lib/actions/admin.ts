@@ -489,11 +489,18 @@ export async function getApiKeys() {
     // Allow reading keys if admin, otherwise empty
     if (!isAdmin) return {};
 
+    // The Fireworks key VALUE must never be shipped to a plain admin's browser
+    // (hiding only the input row still serializes it into the client payload).
+    // Read it from the DB only for super_admins.
+    const isSuperAdmin = await verifySuperAdmin();
+    const keysToFetch = ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"];
+    if (isSuperAdmin) keysToFetch.push("fireworks_api_key");
+
     const supabase = await createClient();
     const { data } = await supabase
         .from("app_config")
         .select("key, value")
-        .in("key", ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"]);
+        .in("key", keysToFetch);
 
     // Transform into object
     const keys: Record<string, string> = {};
@@ -510,9 +517,19 @@ export async function updateApiKey(key: string, value: string) {
         return { success: false, error: "Unauthorized: Admins only." };
     }
 
-    const allowedKeys = ["openai_api_key", "google_api_key", "anthropic_api_key", "agent_api_url"];
+    const allowedKeys = ["openai_api_key", "google_api_key", "anthropic_api_key", "fireworks_api_key", "agent_api_url"];
     if (!allowedKeys.includes(key)) {
         return { success: false, error: "Invalid API Key type." };
+    }
+
+    // The Fireworks key is a super-admin-only control surface (the models it
+    // unlocks are restricted to super_admins everywhere else), so guard it here
+    // too — a plain admin must not be able to set/rotate it.
+    if (key === "fireworks_api_key") {
+        const isSuperAdmin = await verifySuperAdmin();
+        if (!isSuperAdmin) {
+            return { success: false, error: "Unauthorized: Super Admins only." };
+        }
     }
 
     const supabase = await createClient();
@@ -541,6 +558,17 @@ export async function updateUserAllowedModels(userId: string, allowedModels: str
         return { success: false, error: "Unauthorized: Admins only." };
     }
 
+    // A plain admin must not be able to grant a user access to a Fireworks
+    // model via the allow-list (that would route a non-super-admin's chat to
+    // Fireworks, bypassing the super-admin-only gate). Only super_admins may
+    // place a fireworks: id into anyone's allowed_models.
+    if (allowedModels.some(m => m.startsWith('fireworks:'))) {
+        const isSuperAdmin = await verifySuperAdmin();
+        if (!isSuperAdmin) {
+            return { success: false, error: "Only Super Admins can grant access to Fireworks models." };
+        }
+    }
+
     const supabase = await createClient();
 
     // We update via rpc or just direct if RLS allows admin access
@@ -564,6 +592,13 @@ export async function updateModelAvailability(modelId: string, isAvailableToAll:
         return { success: false, error: "Unauthorized: Admins only." };
     }
 
+    // Fireworks rows are a super-admin-only surface. Without this guard a plain
+    // admin could flip a fireworks model to is_available_to_all=true and expose
+    // it to EVERY user (route.ts honours is_available_to_all).
+    if (modelId.startsWith('fireworks:') && !(await verifySuperAdmin())) {
+        return { success: false, error: "Unauthorized: Super Admins only (Fireworks models)." };
+    }
+
     const supabase = await createClient();
 
     const { error } = await supabase
@@ -577,6 +612,64 @@ export async function updateModelAvailability(modelId: string, isAvailableToAll:
 
     if (error) {
         console.error("Error updating model availability:", error);
+        return { success: false, error: error.message };
+    }
+
+    revalidatePath("/admin");
+    return { success: true };
+}
+
+// 7. Get ALL models incl. inactive (Admin Management only).
+// getActiveModels() (lib/actions/models.ts) hides is_active=false rows because
+// it feeds the chat selector. The admin ModelManager needs the full set so a
+// super_admin can flip pre-staged models (e.g. Fireworks) on/off.
+export interface AdminAIModel {
+    id: string;
+    name: string;
+    provider: string;
+    is_available_to_all: boolean;
+    is_active: boolean;
+}
+
+export async function getAllModelsForAdmin(): Promise<AdminAIModel[]> {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) return [];
+
+    const supabase = await createClient();
+    const { data, error } = await supabase
+        .from('ai_models')
+        .select('id, name, provider, is_available_to_all, is_active')
+        .order('provider', { ascending: true })
+        .order('name', { ascending: true });
+
+    if (error) {
+        console.error("Error fetching all models for admin:", error);
+        return [];
+    }
+
+    return (data || []) as AdminAIModel[];
+}
+
+// 8. Toggle a model's active flag without touching its availability (Admin).
+export async function updateModelActive(modelId: string, isActive: boolean) {
+    const isAdmin = await verifyAdmin();
+    if (!isAdmin) {
+        return { success: false, error: "Unauthorized: Admins only." };
+    }
+
+    // Fireworks rows are super-admin-only (see updateModelAvailability).
+    if (modelId.startsWith('fireworks:') && !(await verifySuperAdmin())) {
+        return { success: false, error: "Unauthorized: Super Admins only (Fireworks models)." };
+    }
+
+    const supabase = await createClient();
+    const { error } = await supabase
+        .from('ai_models')
+        .update({ is_active: isActive, updated_at: new Date().toISOString() })
+        .eq('id', modelId);
+
+    if (error) {
+        console.error("Error updating model active flag:", error);
         return { success: false, error: error.message };
     }
 

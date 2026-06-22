@@ -32,6 +32,7 @@ import {
 } from "@/lib/actions/phases";
 import { createClient } from "@/lib/supabase/client";
 import { getActiveModels, getUserAllowedModels, type AIModel } from "@/lib/actions/models";
+import { getCurrentUserRole } from "@/lib/actions/admin";
 
 interface PhasesCardProps {
     projectId: string;
@@ -56,12 +57,15 @@ export function PhasesCard({ projectId, canEdit, initialPhases }: PhasesCardProp
             try {
                 const { data: { user } } = await supabase.auth.getUser();
                 if (!user) return;
-                const [models, allowed] = await Promise.all([
+                const [models, allowed, role] = await Promise.all([
                     getActiveModels(),
                     getUserAllowedModels(user.id),
+                    getCurrentUserRole(),
                 ]);
+                // Fireworks phase models are super-admin-only (mirror ChatInterface).
+                const isSuper = role === 'super_admin';
                 setAvailableModels(
-                    models.filter(m => m.is_available_to_all || allowed.includes(m.id))
+                    models.filter(m => m.provider === 'fireworks' ? isSuper : (m.is_available_to_all || allowed.includes(m.id) || isSuper))
                 );
             } catch (e) {
                 console.error("PhasesCard: failed to load models", e);

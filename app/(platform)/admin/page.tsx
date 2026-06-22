@@ -73,11 +73,11 @@ export default async function AdminPage() {
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
-                <ApiKeyList initialKeys={apiKeys} />
+                <ApiKeyList initialKeys={apiKeys} isSuperAdmin={isSuperAdmin} />
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">
-                <ModelManager />
+                <ModelManager isSuperAdmin={isSuperAdmin} />
             </section>
 
             <section className="bg-card p-6 rounded-lg shadow-sm border space-y-6">

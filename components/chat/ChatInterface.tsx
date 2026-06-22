@@ -7,6 +7,7 @@ import { Send, Upload, RotateCcw, Copy, Check, ThumbsUp, ThumbsDown, Paperclip, 
 import { cn, uuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
+import { ChoiceCards, parseChoices } from "@/components/chat/ChoiceCards";
 import { isTodoMessage } from "@/components/chat/TodoListRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
@@ -267,6 +268,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
     const [isRecording, setIsRecording] = useState(false);
     const [model, setModel] = useState(initialModel || "openai:gpt-5-mini");
     const [availableModels, setAvailableModels] = useState<AIModel[]>([]);
+    // True once the user explicitly picks a model in the composer dropdown.
+    // In phase-mode (ABM) projects the backend only overrides the per-phase
+    // models when this is set, so the default gpt-5-mini never silently
+    // downgrades a production pipeline the user didn't touch.
+    const [pickedModel, setPickedModel] = useState(false);
     const [creatingNewChat, setCreatingNewChat] = useState(false);
     const [pendingImages, setPendingImages] = useState<string[]>(initialImages || []);
     const [pendingDocuments, setPendingDocuments] = useState<{ name: string, url: string, extractedContent: string }[]>([]);
@@ -369,10 +375,16 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                     getCurrentUserRole()
                 ]);
 
-                // Filter based on access
-                const filtered = models.filter(m =>
-                    m.is_available_to_all || allowed.includes(m.id)
-                );
+                // Filter based on access.
+                // Fireworks models are a super-admin-only sandbox: nobody else
+                // ever sees them in the picker. Super admins also bypass the
+                // per-model allow-list (consistent with /api/chat), so they see
+                // every active model.
+                const isSuper = role === 'super_admin';
+                const filtered = models.filter(m => {
+                    if (m.provider === 'fireworks') return isSuper;
+                    return m.is_available_to_all || allowed.includes(m.id) || isSuper;
+                });
 
                 setAvailableModels(filtered);
             } catch (error) {
@@ -430,11 +442,23 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         }
     }, [initialImages]);
 
+    // Restore the per-chat model on load. Precedence: the one-shot initialModel
+    // handoff from the project page (sessionStorage, consumed once) wins; else
+    // fall back to the DURABLE per-chat memory in localStorage. This is what makes
+    // a RELOAD keep the model the user picked instead of resetting to gpt-5-mini.
     useEffect(() => {
-        if (initialModel && model !== initialModel) {
-            setModel(initialModel);
+        if (initialModel) {
+            if (model !== initialModel) setModel(initialModel);
+            setPickedModel(true);
+            try { if (chatId) localStorage.setItem(`chat_model_${chatId}`, initialModel); } catch { /* ignore */ }
+            return;
         }
-    }, [initialModel]);
+        try {
+            const saved = chatId ? localStorage.getItem(`chat_model_${chatId}`) : null;
+            if (saved) { setModel(saved); setPickedModel(true); }
+        } catch { /* ignore */ }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialModel, chatId]);
 
     // Check if there's a pending message on initial load yes
     useEffect(() => {
@@ -1021,7 +1045,11 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                             content: m.content,
                             images: m.images
                         })),
-                    model: overrideModel || model
+                    model: overrideModel || model,
+                    // Tell the backend the model was a deliberate choice (explicit
+                    // composer pick, or a programmatic override/rerun) so it may
+                    // override per-phase models for this run. See /api/chat.
+                    modelExplicit: !!overrideModel || pickedModel
                 })
             });
 
@@ -1927,9 +1955,36 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                                                 </div>
                                             )}
 
-                                            {displayContent && !isDuplicateOfThinkingStep && !isTodoMessage(displayContent) && (
-                                                <MarkdownContent content={displayContent} />
-                                            )}
+                                            {displayContent && !isDuplicateOfThinkingStep && !isTodoMessage(displayContent) && (() => {
+                                                // Strip hidden <!--mase-choice ...--> markers out of the bubble and
+                                                // surface them as clickable MCQ cards (last assistant message only).
+                                                const parsed = parseChoices(displayContent);
+                                                let bubbleText = parsed.text;
+                                                let effChoices = parsed.choices;
+                                                // If a single question has no explicit "question" field, lift the
+                                                // lead-in prose's last line into the card as its question (so it
+                                                // shows INSIDE the card, not as loose prose above it).
+                                                if (effChoices.length === 1 && !effChoices[0].question && bubbleText.trim()) {
+                                                    const lines = bubbleText.trim().split(/\n+/);
+                                                    const q = lines.pop() || "";
+                                                    effChoices = [{ ...effChoices[0], question: q }];
+                                                    bubbleText = lines.join("\n").trim();
+                                                }
+                                                const isLast = i === filteredMessages.length - 1;
+                                                const showChoices = effChoices.length > 0 && isLast && !msg.isProcessing && !loading;
+                                                return (
+                                                    <>
+                                                        {bubbleText && <MarkdownContent content={bubbleText} />}
+                                                        {showChoices && (
+                                                            <ChoiceCards
+                                                                choices={effChoices}
+                                                                disabled={loading || !!msg.isProcessing}
+                                                                onAnswer={(t) => handleSend(t)}
+                                                            />
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
 
                                             {(msg.isProcessing || (loading && i === messages.length - 1)) && (
                                                 <div className="flex items-center gap-2 mt-2 text-muted-foreground animate-pulse">
@@ -2181,7 +2236,7 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                             {availableModels.length > 0 && (
                                 <DropdownMenuContent align="end">
                                     {availableModels.map(m => (
-                                        <DropdownMenuItem key={m.id} onClick={() => setModel(m.id)}>
+                                        <DropdownMenuItem key={m.id} onClick={() => { setModel(m.id); setPickedModel(true); try { if (chatId) localStorage.setItem(`chat_model_${chatId}`, m.id); } catch { /* ignore */ } }}>
                                             {m.name}
                                         </DropdownMenuItem>
                                     ))}
