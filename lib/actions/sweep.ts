@@ -123,7 +123,7 @@ export async function runOppNow(
         const r = await fetch(`${base}/api/deal-engine/sweep/trigger`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ opportunity_id: oppId }),
+            body: JSON.stringify({ opportunity_id: oppId, source: "manual" }),
             cache: "no-store",
         });
         if (!r.ok) {
@@ -373,4 +373,69 @@ export async function getOppAnalysis(oppId: string): Promise<OppAnalysis> {
             source: d.source ?? null,
         })),
     };
+}
+
+// ---------------------------------------------------------------------------
+// Avoma trigger / datalake sync status. A read-only window into the `datalake`
+// Supabase project (the Avoma transcript store) so an admin can confirm the
+// Avoma AINOTE webhook trigger is actually FIRING — new tracked-opp calls land
+// in avoma_meetings within seconds of Avoma producing its notes. SERVER-SIDE
+// service client (DATALAKE_URL / DATALAKE_SERVICE_KEY); the key never reaches
+// the browser. Degrades to configured=false / zeros on any failure so the tab
+// never throws. The deal sweep now reads its Avoma context from this same store.
+// ---------------------------------------------------------------------------
+export type AvomaSyncRow = {
+    uuid: string;
+    subject: string | null;
+    crm_opportunity_id: string | null;
+    start_at: string | null;
+    synced_at: string | null;
+    transcript_ready: boolean | null;
+};
+export type AvomaSyncStatus = {
+    configured: boolean;
+    meetings: number | null;
+    transcripts: number | null;
+    last_synced: string | null;
+    recent: AvomaSyncRow[];
+};
+
+function datalakeClient() {
+    const url = process.env.DATALAKE_URL || "";
+    const key = process.env.DATALAKE_SERVICE_KEY || "";
+    if (!url || !key) return null;
+    return createServiceClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+    });
+}
+
+export async function getAvomaSyncStatus(): Promise<AvomaSyncStatus> {
+    const empty: AvomaSyncStatus = {
+        configured: false, meetings: null, transcripts: null, last_synced: null, recent: [],
+    };
+    if (!(await verifyAdmin())) return empty;
+    const dl = datalakeClient();
+    if (!dl) return empty;
+    try {
+        const [meetingsRes, transcriptsRes, recentRes] = await Promise.all([
+            dl.from("avoma_meetings").select("uuid", { count: "exact", head: true }),
+            dl.from("avoma_transcripts").select("meeting_uuid", { count: "exact", head: true }),
+            dl
+                .from("avoma_meetings")
+                .select("uuid, subject, crm_opportunity_id, start_at, synced_at, transcript_ready")
+                .order("synced_at", { ascending: false })
+                .limit(25),
+        ]);
+        const recent = (recentRes.data ?? []) as AvomaSyncRow[];
+        return {
+            configured: true,
+            meetings: meetingsRes.count ?? null,
+            transcripts: transcriptsRes.count ?? null,
+            last_synced: recent[0]?.synced_at ?? null,
+            recent,
+        };
+    } catch (e: any) {
+        console.error("getAvomaSyncStatus:", e?.message || e);
+        return { ...empty, configured: true };
+    }
 }
