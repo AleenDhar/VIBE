@@ -22,6 +22,7 @@ import {
     GitBranch,
     Coins,
     Activity,
+    Radar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
@@ -432,6 +433,27 @@ export function Sidebar({ isCollapsed, toggleCollapse, mobileOpen = false, setMo
                                 >
                                     <Activity className="h-[18px] w-[18px] flex-shrink-0" />
                                     <span className={cn(isCollapsed && "md:hidden")}>Deal Sweep</span>
+                                </Link>
+                            );
+                        })()}
+                        {/* Admin - MQL Watch */}
+                        {(userRole === 'admin' || userRole === 'super_admin') && (() => {
+                            const isActive = pathname === '/mql-watch' || pathname.startsWith('/mql-watch/');
+                            return (
+                                <Link
+                                    href="/mql-watch"
+                                    className={cn(
+                                        "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                                        isCollapsed ? "md:justify-center md:px-2 md:w-10" : "",
+                                        isActive
+                                            ? "text-primary font-medium bg-primary/10"
+                                            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                                    )}
+                                    title={isCollapsed ? "MQL Watch" : undefined}
+                                    onClick={() => setMobileOpen?.(false)}
+                                >
+                                    <Radar className="h-[18px] w-[18px] flex-shrink-0" />
+                                    <span className={cn(isCollapsed && "md:hidden")}>MQL Watch</span>
                                 </Link>
                             );
                         })()}
