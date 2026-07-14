@@ -18,6 +18,7 @@ import type { Tag } from "@/lib/actions/tags";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { createClient } from "@/lib/supabase/client";
 import { extractFileContent } from "@/lib/extract-file-content";
+import { uploadFileViaServer } from "@/lib/upload-file";
 import { addDocument } from "@/lib/actions/documents";
 import {
     DropdownMenu,
@@ -189,17 +190,10 @@ export function ProjectPageClient({
             const urls = await Promise.all(
                 files.map(async (file) => {
                     const filePath = `chat/temp_${project.id}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.\-]/g, '')}`;
-                    const { error: uploadError } = await supabase.storage
-                        .from('project-files')
-                        .upload(filePath, file);
-                    if (uploadError) throw uploadError;
-
-                    const { data, error: signedUrlError } = await supabase.storage
-                        .from('project-files')
-                        .createSignedUrl(filePath, 60 * 60 * 24 * 365 * 10);
-                    if (signedUrlError || !data?.signedUrl) throw signedUrlError;
-
-                    return data.signedUrl;
+                    // Upload via our own origin — Zscaler blocks direct browser -> Supabase uploads.
+                    const { signedUrl } = await uploadFileViaServer(file, filePath, { signedUrl: true });
+                    if (!signedUrl) throw new Error("No signed URL returned");
+                    return signedUrl;
                 })
             );
 
@@ -227,11 +221,8 @@ export function ProjectPageClient({
             for (const file of files) {
                 const filePath = `chat/temp_${project.id}/${Date.now()}_${file.name}`;
 
-                const { error: uploadError } = await supabase.storage
-                    .from("project-files")
-                    .upload(filePath, file);
-
-                if (uploadError) throw uploadError;
+                // Upload via our own origin — Zscaler blocks direct browser -> Supabase uploads.
+                const { publicUrl } = await uploadFileViaServer(file, filePath);
 
                 let extractedContent = "";
                 try {
@@ -243,10 +234,6 @@ export function ProjectPageClient({
                 if (project.id) {
                     await addDocument(project.id, file.name, filePath, extractedContent || undefined);
                 }
-
-                const { data: { publicUrl } } = supabase.storage
-                    .from("project-files")
-                    .getPublicUrl(filePath);
 
                 newDocs.push({
                     name: file.name,

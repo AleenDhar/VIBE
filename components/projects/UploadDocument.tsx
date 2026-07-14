@@ -1,10 +1,10 @@
 "use client";
 
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { useState, useRef } from "react";
 import { Upload } from "lucide-react";
 import { addDocument } from "@/lib/actions/documents";
+import { uploadFileViaServer } from "@/lib/upload-file";
 
 export function UploadDocument({ projectId }: { projectId: string }) {
     const [isUploading, setIsUploading] = useState(false);
@@ -21,18 +21,12 @@ export function UploadDocument({ projectId }: { projectId: string }) {
         setIsUploading(true);
 
         try {
-            const supabase = createClient();
             const fileExt = file.name.split('.').pop();
             const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
             const filePath = `${projectId}/${fileName}`;
 
-            const { error: uploadError } = await supabase.storage
-                .from('project-files')
-                .upload(filePath, file);
-
-            if (uploadError) {
-                throw uploadError;
-            }
+            // Upload via our own origin — Zscaler blocks direct browser -> Supabase uploads.
+            await uploadFileViaServer(file, filePath);
 
             // Call Server Action to save metadata
             const response = await addDocument(projectId, file.name, filePath);

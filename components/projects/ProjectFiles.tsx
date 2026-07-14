@@ -33,16 +33,13 @@ export function ProjectFiles({ projectId, initialFiles, canEdit }: ProjectFilesP
         setUploading(true);
         setUploadStatus("Uploading file...");
 
-        const supabase = createClient();
         const filePath = `projects/${projectId}/${Date.now()}_${file.name}`;
 
         try {
-            // 1. Upload file to Supabase Storage
-            const { error: uploadError } = await supabase.storage
-                .from("project-files")
-                .upload(filePath, file);
-
-            if (uploadError) throw uploadError;
+            // 1. Upload file via our own origin — Zscaler blocks direct
+            //    browser -> Supabase uploads.
+            const { uploadFileViaServer } = await import("@/lib/upload-file");
+            await uploadFileViaServer(file, filePath);
 
             // 2. Extract text content from the file (client-side)
             setUploadStatus("Extracting content...");

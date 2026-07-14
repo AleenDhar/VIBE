@@ -12,6 +12,7 @@ import { isTodoMessage } from "@/components/chat/TodoListRenderer";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { createNewChat } from "@/lib/actions/chat";
 import { extractFileContent } from "@/lib/extract-file-content";
+import { uploadFileViaServer } from "@/lib/upload-file";
 import { addDocument } from "@/lib/actions/documents";
 import { exportToPDF, exportToDocx } from "@/lib/export-utils";
 import { extractBehavioralInstructions } from "@/lib/actions/instructions";
@@ -1387,19 +1388,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
         try {
             const urls = await Promise.all(files.map(async (file) => {
                 const filePath = `chat/${chatId}/img_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-                const { error: uploadError } = await supabase.storage
-                    .from("project-files")
-                    .upload(filePath, file);
-
-                if (uploadError) throw uploadError;
-
-                const { data, error: signedUrlError } = await supabase.storage
-                    .from("project-files")
-                    .createSignedUrl(filePath, 60 * 60 * 24 * 365); // 1 year expiry
-
-                if (signedUrlError) throw signedUrlError;
-
-                return data?.signedUrl || '';
+                // Upload via our own origin — Zscaler blocks direct browser -> Supabase uploads.
+                const { signedUrl } = await uploadFileViaServer(file, filePath, { signedUrl: true });
+                return signedUrl || '';
             }));
 
             setPendingImages(prev => [...prev, ...urls.filter(Boolean)]);
@@ -1420,12 +1411,9 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
             for (const file of files) {
                 const filePath = `chat/${chatId}/${Date.now()}_${file.name}`;
 
-                // 1. Upload to Storage
-                const { error: uploadError } = await supabase.storage
-                    .from("project-files")
-                    .upload(filePath, file);
-
-                if (uploadError) throw uploadError;
+                // 1. Upload to Storage via our own origin — Zscaler blocks direct
+                //    browser -> Supabase uploads.
+                const { publicUrl } = await uploadFileViaServer(file, filePath);
 
                 // 2. Extract content (client-side)
                 let extractedContent = "";
@@ -1439,10 +1427,6 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 if (projectId) {
                     await addDocument(projectId, file.name, filePath, extractedContent || undefined);
                 }
-
-                const { data: { publicUrl } } = supabase.storage
-                    .from("project-files")
-                    .getPublicUrl(filePath);
 
                 newDocs.push({
                     name: file.name,
