@@ -492,14 +492,6 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 return false;
             });
 
-        // If the chat already has a completed turn on load, surface the per-run
-        // usage/cost pill immediately — not just transiently after a live run.
-        // (showUsage otherwise starts false and only flips true on a live SSE
-        // 'final', so a reloaded/historical chat never showed its cost.)
-        if (hasFinalResponse) {
-            setShowUsage(true);
-        }
-
         // If the turn hasn't resolved, the agent MIGHT still be thinking — but
         // only re-arm the spinner when the run is plausibly still alive. A live
         // run emits status/tool rows continuously, so the LATEST row is always
@@ -2112,7 +2104,23 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 </div>
             )}
 
-            <UsagePill chatId={chatId} visible={showUsage} />
+            {/* Show the per-chat cost/token pill whenever this chat already has a
+                completed assistant reply — not only transiently after a live run.
+                `showUsage` covers the just-finished live run; the messages check
+                covers loaded/historical chats (reload, revisit). Gated on !loading
+                so it doesn't flash mid-run. UsagePill self-hides if no usage row. */}
+            <UsagePill
+                chatId={chatId}
+                visible={
+                    showUsage ||
+                    (!loading &&
+                        messages.some(
+                            (m: any) =>
+                                m.role === "assistant" &&
+                                (m.content || "").trim().length > 0
+                        ))
+                }
+            />
 
             <div className="p-4 bg-background w-full max-w-screen flex justify-center pb-6">
                 <div className="w-full max-w-3xl relative bg-muted/30 border border-border/50 rounded-2xl shadow-sm focus-within:ring-1 focus-within:ring-primary/20 focus-within:border-primary/20 transition-all flex flex-col">
