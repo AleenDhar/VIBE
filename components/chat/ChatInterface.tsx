@@ -492,6 +492,14 @@ export function ChatInterface({ projectId, chatId, initialMessages, initialInput
                 return false;
             });
 
+        // If the chat already has a completed turn on load, surface the per-run
+        // usage/cost pill immediately — not just transiently after a live run.
+        // (showUsage otherwise starts false and only flips true on a live SSE
+        // 'final', so a reloaded/historical chat never showed its cost.)
+        if (hasFinalResponse) {
+            setShowUsage(true);
+        }
+
         // If the turn hasn't resolved, the agent MIGHT still be thinking — but
         // only re-arm the spinner when the run is plausibly still alive. A live
         // run emits status/tool rows continuously, so the LATEST row is always
