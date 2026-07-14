@@ -13,10 +13,17 @@ export async function GET(
 
   const { chat_id } = await params;
   const agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
+  // The backend gates /api/usage behind its API auth token (only /api/chat,
+  // /api/config etc. are public). Without this header the call 401s and no
+  // cost is ever shown.
+  const apiAuthToken = process.env.API_AUTH_TOKEN || process.env.DISPATCH_SECRET;
 
   try {
     const res = await fetch(`${agentApiUrl}/api/usage/${chat_id}`, {
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiAuthToken ? { Authorization: `Bearer ${apiAuthToken}` } : {}),
+      },
     });
 
     if (!res.ok) {

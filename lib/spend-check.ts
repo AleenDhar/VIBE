@@ -17,6 +17,9 @@ export async function computeTodaySpend(
 ): Promise<number> {
   const agentApiUrl =
     process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
+  // Backend gates /api/usage behind its API auth token; without it the call 401s
+  // and today's spend silently reads as 0 (and the spend cap never enforces).
+  const apiAuthToken = process.env.API_AUTH_TOKEN || process.env.DISPATCH_SECRET;
   const todayStart = getISTDayStart();
   const todayStartMs = todayStart.getTime();
 
@@ -24,7 +27,10 @@ export async function computeTodaySpend(
   const [chatsRes, usageRes] = await Promise.all([
     supabase.from("chats").select("id").eq("user_id", userId),
     fetch(`${agentApiUrl}/api/usage?limit=10000&offset=0`, {
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiAuthToken ? { Authorization: `Bearer ${apiAuthToken}` } : {}),
+      },
     }),
   ]);
 
