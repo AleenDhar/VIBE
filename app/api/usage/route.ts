@@ -22,10 +22,15 @@ export async function GET(request: NextRequest) {
   const limit = request.nextUrl.searchParams.get("limit") || "100";
   const offset = request.nextUrl.searchParams.get("offset") || "0";
   const agentApiUrl = process.env.AGENT_API_URL || "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
+  // Backend gates /api/usage behind its API auth token; without it the call 401s.
+  const apiAuthToken = process.env.API_AUTH_TOKEN || process.env.DISPATCH_SECRET;
 
   try {
     const res = await fetch(`${agentApiUrl}/api/usage?limit=${limit}&offset=${offset}`, {
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiAuthToken ? { Authorization: `Bearer ${apiAuthToken}` } : {}),
+      },
     });
 
     if (!res.ok) {

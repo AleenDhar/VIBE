@@ -36,6 +36,8 @@ export async function GET(request: NextRequest) {
   const agentApiUrl =
     process.env.AGENT_API_URL ||
     "http://mase-alb-1262623499.ap-south-1.elb.amazonaws.com";
+  // Backend gates /api/usage behind its API auth token; without it the call 401s.
+  const apiAuthToken = process.env.API_AUTH_TOKEN || process.env.DISPATCH_SECRET;
 
   try {
     // Fetch global daily credit setting
@@ -50,7 +52,12 @@ export async function GET(request: NextRequest) {
     // Fetch all usage from the external backend (large limit)
     const res = await fetch(
       `${agentApiUrl}/api/usage?limit=10000&offset=0`,
-      { headers: { "Content-Type": "application/json" } }
+      {
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiAuthToken ? { Authorization: `Bearer ${apiAuthToken}` } : {}),
+        },
+      }
     );
 
     if (!res.ok) {
